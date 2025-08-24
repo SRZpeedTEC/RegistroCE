@@ -5,7 +5,7 @@
 .DATA
 
 ;--- CONSTANTES ---
-NUM_MAX_ESTU EQU 15 ; se definen 15 alumnos como maximo
+NUM_MAX_ESTU EQU 16 ; se definen 15 alumnos como maximo
 NOMBRE_LEN EQU 30; tamano maximo de char del nombre
 NOTA_LEN EQU 3; tamano de char de la nota
 
@@ -19,7 +19,7 @@ msg_Mostrar_Stats DB 13, 10, '(2) Mostrar estadisticas', '$'
 msg_Buscar_Estud DB 13, 10, '(3) Buscar estudiantes por posicion', '$'
 msg_Ordenar_Calid DB 13, 10, '(4) Ordenar calificaciones', '$'
 msg_Salir DB 13, 10, '(5) Salir', '$'
-msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5) y presione Enter: $'
+msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5): $'
 
 ;mensajes de error
 msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-5', 13, 10, '$'
@@ -27,15 +27,17 @@ msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor i
 ;mensajes de ingresar estudiante
 msg_In_Nombre_Estud DB 13, 10, 'Ingrese el nombre del estudiante o ingrese 0 para salir al menu:', 13, 10, '$'
 msg_In_Nota_Estud DB 13, 10, 'Ingrese la nota del estudiante:', 13, 10, '$'
+msg_Max_Alcanzado DB 13,10,'Se alcanzo el maximo de 15 estudiantes.',13,10,'$'
+
 
 ;mensajes de mostrar estadisticas
-msg_Stats_Promedio DB 13, 10, 'Promedio:', 13, 10, '$'
-msg_Stats_Nota_Max DB 13, 10, 'Nota Maxima:', 13, 10, '$'
-msg_Stats_Nota_Min DB 13, 10, 'Nota Minima:', 13, 10, '$'
-msg_Stats_Aprob DB 13, 10, 'Cantidad de estudiantes aprobados:', 13, 10, '$'
-msg_Stats_Aprob_Porc DB 13, 10, 'Porcentaje aprobacion:', 13, 10, '$'
-msg_Stats_Desaprob DB 13, 10, 'Cantidad de estudiantes desaprobados:', 13, 10, '$'
-msg_Stats_Desaprob_Porc DB 13, 10, 'Porcentaje desaprobacion:', 13, 10, '$'
+msg_Stats_Promedio DB 13, 10, 'Promedio:', '$'
+msg_Stats_Nota_Max DB 13, 10, 'Nota Maxima:', '$'
+msg_Stats_Nota_Min DB 13, 10, 'Nota Minima:', '$'
+msg_Stats_Aprob DB 13, 10, 'Cantidad de estudiantes aprobados:', '$'
+msg_Stats_Aprob_Porc DB 13, 10, 'Porcentaje aprobacion:', '$'
+msg_Stats_Desaprob DB 13, 10, 'Cantidad de estudiantes desaprobados:', '$'
+msg_Stats_Desaprob_Porc DB 13, 10, 'Porcentaje desaprobacion:', '$'
 
 ;mensajes de buscar estudiante por posicion
 msg_Buscar_Idx DB 13, 10, 'Ingrese el valor de la posicion del estudiante que desea consultar:', 13, 10, '$'
@@ -58,7 +60,7 @@ NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
 notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0) 
 
-; buffer para AH=0Ah (line input): [max][count][data...]
+; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
 buf_Opcion   DB 2,0, 2 DUP(0)
 
@@ -108,77 +110,225 @@ Inputs:
     mov ah, 09h
     int 21h
 
-    ; limpiar buffer y leer UNA LÍNEA (espera Enter)
-    mov ah, 0Ch         ; flush buffer
-    mov al, 0Ah         ; line input
+    ; limpiar buffer 
+    mov ah, 0Ch         ; flush/limpiar buffer
+    mov al, 0Ah         ; input
     mov dx, OFFSET buf_Opcion
-    int 21h             ; buf[1]=count ; buf+2=primer char
+    int 21h             ; 
 
-    ; ¿ingresó al menos 1 carácter?
+
+    ; se verifica si se ingresó al menos 1 carácter
     mov al, [buf_Opcion+1]
     cmp al, 1
     jb  Inputs
 
-    ; tomar el primer carácter y GUARDARLO en BL
+    ; primer char se guarda en bl
     mov bl, [buf_Opcion+2]
 
     ; muestra digito del usuario
     mov dl, bl
     mov ah, 02h
     int 21h
-    mov dl, 13          ; CR
+    mov dl, 13         
     mov ah, 02h
     int 21h
-    mov dl, 10          ; LF
+    mov dl, 10         
     mov ah, 02h
     int 21h
 
-    ; ------------------ DECISIÓN ------------------
+; ------------------ Jumps condicionales cortos ------------------
     cmp bl, '1'
-    je  Opcion1
+    jne  _Not1
+    jmp  Opcion1
+_Not1:
     cmp bl, '2'
-    je  Opcion2
+    jne  _Not2
+    jmp  Opcion2
+_Not2:
     cmp bl, '3'
-    je  Opcion3
+    jne  _Not3
+    jmp  Opcion3
+_Not3:
     cmp bl, '4'
-    je  Opcion4
+    jne  _Not4
+    jmp  Opcion4
+_Not4:
     cmp bl, '5'
-    je Opcion5
+    jne  _Error
+    jmp  Opcion5
 
-    ; si no es 1–5 → Opcion6
-    jmp Opcion6  
+_Error:
+    jmp  Opcion6
 
-; ------------------ RUTINAS DE OPCIÓN ------------------
+; ------------------ RUTAS DE OPCIÓN ------------------
+
+; ------- Ingresar calificaciones -------
 Opcion1:
+    ; comprobar si el array esta lleno
+    mov al, contador_Estud
+    cmp al, NUM_MAX_ESTU
+    jb  O1_PedirNombre
+    ; si esta lleno, volver al menu
+    mov dx, OFFSET msg_Max_Alcanzado
+    mov ah, 09h
+    int 21h
+    jmp Menu_Principal
+
+; ----------- Pedir NOMBRE -----------
+O1_PedirNombre:
     mov dx, OFFSET msg_In_Nombre_Estud
     mov ah, 09h
     int 21h
-    jmp Fin_Programa
 
+    ; leer linea 
+    mov ah, 0Ch
+    mov al, 0Ah
+    mov dx, OFFSET buf_Nombre
+    int 21h
+
+    ; se ingreso un char
+    mov al, [buf_Nombre+1]
+    cmp al, 1
+    jb  O1_PedirNombre
+
+    ; si primer char es '0', volver al menú
+    mov al, [buf_Nombre+2]
+    cmp al, '0'
+    jne _NomOK
+    jmp Menu_Principal
+_NomOK:
+
+    ; ---------- Calcular destino NOMBRE ----------
+    mov al, contador_Estud    ; idx
+    mov cl, al                ; CL = idx
+    xor ah, ah                ; AX = idx
+    mov bl, NOMBRE_LEN        ; 30
+    mul bl                    ; AX = idx*30
+    mov di, OFFSET nombres_Estud
+    add di, ax                ; DI = &nombres_Estud[idx*30]
+
+    ; len_nombre = min(buf_Nombre[1], NOMBRE_LEN)
+    mov al, [buf_Nombre+1]
+    mov bl, NOMBRE_LEN
+    cmp al, bl
+    jbe  O1_LenNom_OK
+    mov al, bl
+
+O1_LenNom_OK:
+    mov dl, al                ; DL=len_nombre
+
+    ; NOMBRE_LEN_ARR[idx] = len_nombre
+    mov bx, OFFSET NOMBRE_LEN_ARR
+    xor ax, ax
+    mov al, cl
+    add bx, ax
+    mov [bx], dl
+
+    ; Copiar nombre
+    mov si, OFFSET buf_Nombre+2
+    xor cx, cx
+    mov cl, dl
+    rep movsb
+
+    ; ----------- Pedir NOTA -----------
+O1_PedirNota:
+    mov dx, OFFSET msg_In_Nota_Estud
+    mov ah, 09h
+    int 21h
+
+    mov ah, 0Ch
+    mov al, 0Ah
+    mov dx, OFFSET bufGrade
+    int 21h
+
+    mov al, [bufGrade+1]
+    cmp al, 1
+    jb  O1_PedirNota
+
+    ; len_nota = min(bufGrade[1], NOTA_LEN)
+    mov al, [bufGrade+1]
+    mov bl, NOTA_LEN          ; 3
+    cmp al, bl
+    jbe  O1_LenNota_OK
+    mov al, bl
+
+O1_LenNota_OK:
+    mov dl, al                ; DL=len_nota
+
+    ; &notas[idx*3]
+    mov al, cl                ; idx
+    xor ah, ah
+    mov bl, NOTA_LEN          ; 3
+    mul bl                    ; AX=idx*3
+    mov di, OFFSET notas
+    add di, ax
+
+    ; NOTAS_LEN_ARR[idx] = len_nota
+    mov bx, OFFSET NOTAS_LEN_ARR
+    xor ax, ax
+    mov al, cl
+    add bx, ax
+    mov [bx], dl
+
+    ; Copiar nota
+    mov si, OFFSET bufGrade+2
+    xor cx, cx
+    mov cl, dl
+    rep movsb
+
+    ; incrementar contador_Estud +1
+    inc contador_Estud
+
+    ; volver al menú
+    jmp Menu_Principal
+
+
+; ------- Mostrar estadisticas -------
 Opcion2:
-    mov dx, OFFSET msg_Mostrar_Stats
+    mov dx, OFFSET msg_Stats_Promedio
     mov ah, 09h
     int 21h
-    jmp Fin_Programa
+    mov dx, OFFSET msg_Stats_Aprob
+    mov ah, 09h
+    int 21h
+    mov dx, OFFSET msg_Stats_Aprob_Porc
+    mov ah, 09h
+    int 21h
+    mov dx, OFFSET msg_Stats_Desaprob
+    mov ah, 09h
+    int 21h
+    mov dx, OFFSET msg_Stats_Desaprob_Porc
+    mov ah, 09h
+    int 21h
 
+    jmp Menu_Principal
+
+
+; ------- Buscar estudiante por idx -------
 Opcion3:
-    mov dx, OFFSET msg_Buscar_Estud
+    mov dx, OFFSET msg_Buscar_Idx
     mov ah, 09h
     int 21h
-    jmp Fin_Programa
+    jmp Menu_Principal
 
+
+; ------- Ordenar calificaciones -------
 Opcion4:
-    mov dx, OFFSET msg_Ordenar_Calid
+    mov dx, OFFSET msg_Ordenar_Asc_Desc
     mov ah, 09h
     int 21h
-    jmp Fin_Programa
+    jmp Menu_Principal
 
+
+; ------- Terminar programa -------
 Opcion5:
     mov dx, OFFSET msg_End
     mov ah, 09h
     int 21h
     jmp Fin_Programa
 
+
+; ------- Manejo error en menu -------
 Opcion6: 
     mov dx, OFFSET msg_Error_Menu
     mov ah, 09h
