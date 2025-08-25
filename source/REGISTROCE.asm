@@ -415,15 +415,14 @@ MostrarEstudiantes PROC NEAR
     int 21h
 
     xor cx, cx
-    mov cx, contador_Estud     ; CX = cantidad
+    mov cl, contador_Estud     ; CL = cantidad (8 bits)
     cmp cx, 0
-    je  .done
+    je  MS_Done
 
     xor si, si                 ; SI = idx
-    
-.Siguiente_Estud:
+
+MS_Siguiente_Estud:
     ; ---- imprimir nombre ----
-    
     ; DI = &nombres_Estud[idx * NOMBRE_LEN]
     mov ax, si
     mov bx, NOMBRE_LEN
@@ -439,17 +438,16 @@ MostrarEstudiantes PROC NEAR
 
     mov dx, di
 
-.Print_Nombre:
-    jcxz .Siguiente_Nombre
-    mov dl, [di]       
+MS_Print_Nombre:
+    jcxz MS_Siguiente_Nombre
+    mov dl, [di]
     mov ah, 02h
     int 21h
     inc di
     dec cx
-    jmp short .Print_Nombre
+    jmp short MS_Print_Nombre
 
-.Siguiente_Nombre:
-
+MS_Siguiente_Nombre:
     ; espacio
     mov dl, ' '
     mov ah, 02h
@@ -470,17 +468,17 @@ MostrarEstudiantes PROC NEAR
     xor ch, ch
 
     mov dx, di
-.Print_Nota:
-    jcxz .Nueva_Linea
-    mov dl, [di]       
+
+MS_Print_Nota:
+    jcxz MS_Nueva_Linea
+    mov dl, [di]
     mov ah, 02h
     int 21h
     inc di
     dec cx
-    jmp short .Print_Nota
+    jmp short MS_Print_Nota
 
-.Nueva_Linea:
-    ; Imprimir por consola
+MS_Nueva_Linea:
     mov dl, 13
     mov ah, 02h
     int 21h
@@ -490,15 +488,15 @@ MostrarEstudiantes PROC NEAR
 
     inc si
 
-    ; trackear posicion en el array para saber cuales faltan
+    ; quedan?  (contador_Estud - si)
     xor ax, ax
     mov al, contador_Estud
     sub ax, si
     mov cx, ax
-    jcxz .done
-    jmp short .Siguiente_Estud
+    jcxz MS_Done
+    jmp short MS_Siguiente_Estud
 
-.done:
+MS_Done:
     pop di
     pop si
     pop dx
@@ -507,6 +505,7 @@ MostrarEstudiantes PROC NEAR
     pop ax
     ret
 MostrarEstudiantes ENDP
+
 
 ; ------- Mostrar estadisticas -------
 Opcion2:
