@@ -7,7 +7,8 @@
 ;--- CONSTANTES ---
 NUM_MAX_ESTU EQU 16 ; se definen 15 alumnos como maximo
 NOMBRE_LEN EQU 30; tamano maximo de char del nombre
-NOTA_LEN EQU 3; tamano de char de la nota
+NOTA_LEN EQU 9; tamano de char de la nota
+tmpNota DB NOTA_LEN DUP(0)
 
 ;--- MSG DE MENU DE SISTEMA ---
 msg_Titulo DB 13, 10, '--- Bienvenido a RegistroCE ---', 13, 10, '$' ; (CR->13) = volver a la linea, (LF->10) = saltar linea
@@ -28,6 +29,9 @@ msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor i
 msg_In_Nombre_Estud DB 13, 10, 'Ingrese el nombre del estudiante o ingrese 0 para salir al menu:', 13, 10, '$'
 msg_In_Nota_Estud DB 13, 10, 'Ingrese la nota del estudiante:', 13, 10, '$'
 msg_Max_Alcanzado DB 13,10,'Se alcanzo el maximo de 15 estudiantes.',13,10,'$'
+msg_Nota_Inc DB 13,10,'Las notas solo pueden estar entre 0 y 100.',13,10,'$'
+msg_Listado DB 13,10,'--- Estudiantes registrados ---',13,10,'$'
+
 
 
 ;mensajes de mostrar estadisticas
@@ -51,9 +55,11 @@ msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10,
 ; INPUTS Y MEMORIA ----> DOS line input buffers (AH=0Ah): [max][count][data]
 buf_Contador    DB 3,0, 3 DUP(?)
 buf_Nombre     DB NOMBRE_LEN,0, NOMBRE_LEN DUP(?)
-bufGrade    DB NOTA_LEN,0, NOTA_LEN DUP(?)
+bufNota    DB NOTA_LEN,0, NOTA_LEN DUP(?)
 
-contador_Estud DB 1
+contador_Estud DB 0
+idx_actual DB 0
+
 
 nombres_Estud   DB NUM_MAX_ESTU*NOMBRE_LEN  DUP(0)
 NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
@@ -69,6 +75,8 @@ buf_Opcion   DB 2,0, 2 DUP(0)
 start:
     mov ax, @DATA
     mov ds, ax
+    mov es, ax      ; <-- ES = DS para que movsb escriba en el mismo segmento
+    cld             ; <-- asegura incrementos (DF=0) en las instrucciones de cadena
 
     ;titulo RegistroCE
     mov dx, OFFSET msg_Titulo ;buscar el offset del string
@@ -136,23 +144,23 @@ Inputs:
     mov ah, 02h
     int 21h
 
-; ------------------ Jumps condicionales cortos ------------------
+; ------------------ Jumps condicionales cortos (solucion jumps out of range)------------------
     cmp bl, '1'
-    jne  _Not1
+    jne  _No1
     jmp  Opcion1
-_Not1:
+_No1:
     cmp bl, '2'
-    jne  _Not2
+    jne  _No2
     jmp  Opcion2
-_Not2:
+_No2:
     cmp bl, '3'
-    jne  _Not3
+    jne  _No3
     jmp  Opcion3
-_Not3:
+_No3:
     cmp bl, '4'
-    jne  _Not4
+    jne  _No4
     jmp  Opcion4
-_Not4:
+_No4:
     cmp bl, '5'
     jne  _Error
     jmp  Opcion5
@@ -201,8 +209,10 @@ _NomOK:
     ; ---------- Calcular destino NOMBRE ----------
     mov al, contador_Estud    ; idx
     mov cl, al                ; CL = idx
+    mov idx_actual, al        
+
     xor ah, ah                ; AX = idx
-    mov bl, NOMBRE_LEN        ; 30
+    mov bl, NOMBRE_LEN        ; Se guarda en bl el offset del largo del nombre
     mul bl                    ; AX = idx*30
     mov di, OFFSET nombres_Estud
     add di, ax                ; DI = &nombres_Estud[idx*30]
@@ -218,17 +228,17 @@ O1_LenNom_OK:
     mov dl, al                ; DL=len_nombre
 
     ; NOMBRE_LEN_ARR[idx] = len_nombre
-    mov bx, OFFSET NOMBRE_LEN_ARR
-    xor ax, ax
+    mov bx, OFFSET NOMBRE_LEN_ARR 
+    xor ax, ax ; AX = idx
     mov al, cl
-    add bx, ax
-    mov [bx], dl
+    add bx, ax ; Encontrar la posicion en el array
+    mov [bx], dl ; Guardar len en posicion bx
 
     ; Copiar nombre
     mov si, OFFSET buf_Nombre+2
     xor cx, cx
     mov cl, dl
-    rep movsb
+    rep movsb ; copiar CX en bytes a ES
 
     ; ----------- Pedir NOTA -----------
 O1_PedirNota:
@@ -236,52 +246,267 @@ O1_PedirNota:
     mov ah, 09h
     int 21h
 
+    ; leer línea en bufNota
     mov ah, 0Ch
     mov al, 0Ah
-    mov dx, OFFSET bufGrade
+    mov dx, OFFSET bufNota
     int 21h
 
-    mov al, [bufGrade+1]
+    ; se comprueba si se ingreso por lo menos un char
+    mov al, [bufNota+1]
     cmp al, 1
     jb  O1_PedirNota
 
-    ; len_nota = min(bufGrade[1], NOTA_LEN)
-    mov al, [bufGrade+1]
-    mov bl, NOTA_LEN          ; 3
-    cmp al, bl
-    jbe  O1_LenNota_OK
-    mov al, bl
+    ; -------------------------------------------------
+    ; Formato nota 0<=nota<=100
+    ; -------------------------------------------------
+    mov dh, idx_actual           ; guardar idx en DH
+    mov si, OFFSET bufNota+2    ; entrada
+    mov di, OFFSET tmpNota       ; salida 
 
-O1_LenNota_OK:
-    mov dl, al                ; DL=len_nota
+    ; Verificar si el valor es 100
+    mov al, [si]
+    cmp al, '1'
+    jne  O1_Nota_Inf_100
+    mov al, [si+1]
+    cmp al, '0'
+    jne  O1_Nota_Inf_100
+    mov al, [si+2]
+    cmp al, '0'
+    jne  O1_Nota_Inf_100
 
-    ; &notas[idx*3]
-    mov al, cl                ; idx
+    ; base = "100"
+    mov byte ptr [di],   '1' ; puntero a [di] con '1'
+    mov byte ptr [di+1], '0'
+    mov byte ptr [di+2], '0'
+    mov bx, 3                  ; próxima posición en tmp
+    add si, 3
+    jmp O1_CheckSiguiente
+
+O1_Nota_Inf_100:
+    ; primer dígito 
+    lodsb ; LoadStringByte
+    cmp al, '0'
+    jb  _MalF1           
+    cmp al, '9'
+    ja  _MalF1
+    mov [di], al
+
+    ; segundo dígito 
+    lodsb 
+    cmp al, '0'
+    jb  _MalF2
+    cmp al, '9'
+    ja  _MalF2
+    mov [di+1], al
+
+    mov bx, 2                  ; próxima posición en tmp
+    jmp O1_CheckSiguiente           
+
+_MalF1: jmp O1_Mala_Nota         
+_MalF2: jmp O1_Mala_Nota
+
+O1_CheckSiguiente:
+    mov al, [si]
+    cmp al, 13                 
+    je  O1_Anadir_Punto_Ceros
+
+    ; numero decimal '.'
+    cmp al, '.'
+    jne O1_Mala_Nota
+    mov byte ptr [di+bx], '.'
+    inc bx
+    inc si
+
+    ; copiar decimales 1..5
+    xor cx, cx                 ; CX = dec_count
+    
+O1_Copiar_Deci:
+    mov al, [si]
+    cmp al, 13                 
+    je  O1_Completar_Ceros
+    cmp al, '0'
+    jb  O1_Mala_Nota
+    cmp al, '9'
+    ja  O1_Mala_Nota
+    cmp cx, 5
+    jae O1_Mala_Nota             ; >5 decimales => inválido
+    mov [di+bx], al
+    inc bx
+    inc si
+    inc cx
+    jmp short O1_Copiar_Deci
+
+; no hubo punto: agrégalo y rellena 5 ceros
+O1_Anadir_Punto_Ceros:
+    mov byte ptr [di+bx], '.'
+    inc bx
+    mov cx, 5
+O1_Anadir_Ceros:
+    mov byte ptr [di+bx], '0'
+    inc bx
+    loop O1_Anadir_Ceros
+    jmp short O1_Guardar_Nota
+
+; hubo punto y algunos decimales: completar hasta 5
+O1_Completar_Ceros:
+    mov ax, 5
+    sub ax, cx                 ; AX = faltantes (0..4)
+    mov cx, ax
+    jcxz O1_Guardar_Nota
+O1_Anadir_Ceros2:
+    mov byte ptr [di+bx], '0'
+    inc bx
+    loop O1_Anadir_Ceros2
+
+O1_Guardar_Nota:
+    ; BL tiene la longitud final de la nota
+    mov dl, bl                 ; DL = longitud
+
+    ; CX = longitud (para rep movsb)
+    xor cx, cx
+    mov cl, dl
+
+    ; restaurar idx desde DH
+    mov al, dh                 ; AL = idx
     xor ah, ah
-    mov bl, NOTA_LEN          ; 3
-    mul bl                    ; AX=idx*3
+
+    ; destino: &notas[idx * NOTA_LEN]
+    mov bl, NOTA_LEN           ; stride = 9
+    mul bl                     ; AX = idx*9
     mov di, OFFSET notas
     add di, ax
 
-    ; NOTAS_LEN_ARR[idx] = len_nota
+    ; guardar longitud en NOTAS_LEN_ARR[idx]
     mov bx, OFFSET NOTAS_LEN_ARR
-    xor ax, ax
-    mov al, cl
+    mov al, dh                 ; AL = idx otra vez
+    xor ah, ah
     add bx, ax
     mov [bx], dl
 
-    ; Copiar nota
-    mov si, OFFSET bufGrade+2
-    xor cx, cx
-    mov cl, dl
+    ; copiar tmpNota -> notas[idx] 
+    mov si, OFFSET tmpNota
     rep movsb
 
-    ; incrementar contador_Estud +1
     inc contador_Estud
-
-    ; volver al menú
+    call MostrarEstudiantes
     jmp Menu_Principal
+    
+O1_Mala_Nota:
+    ; repreguntar si es invalida
+    mov dx, OFFSET msg_Nota_Inc
+    mov ah, 09h
+    int 21h
+    jmp O1_PedirNota
 
+; ------------------------------------------------------------
+; MostrarEstudiantes: imprime
+; ------------------------------------------------------------
+MostrarEstudiantes PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov dx, OFFSET msg_Listado
+    mov ah, 09h
+    int 21h
+
+    xor cx, cx
+    mov cx, contador_Estud     ; CX = cantidad
+    cmp cx, 0
+    je  .done
+
+    xor si, si                 ; SI = idx
+    
+.Siguiente_Estud:
+    ; ---- imprimir nombre ----
+    
+    ; DI = &nombres_Estud[idx * NOMBRE_LEN]
+    mov ax, si
+    mov bx, NOMBRE_LEN
+    mul bx
+    mov di, OFFSET nombres_Estud
+    add di, ax
+
+    ; CL = len(nombre)
+    mov bx, OFFSET NOMBRE_LEN_ARR
+    add bx, si
+    mov cl, [bx]
+    xor ch, ch
+
+    mov dx, di
+
+.Print_Nombre:
+    jcxz .Siguiente_Nombre
+    mov dl, [di]       
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short .Print_Nombre
+
+.Siguiente_Nombre:
+
+    ; espacio
+    mov dl, ' '
+    mov ah, 02h
+    int 21h
+
+    ; ---- imprimir nota ----
+    ; DI = &notas[idx * NOTA_LEN]
+    mov ax, si
+    mov bx, NOTA_LEN
+    mul bx
+    mov di, OFFSET notas
+    add di, ax
+
+    ; CL = len(nota)
+    mov bx, OFFSET NOTAS_LEN_ARR
+    add bx, si
+    mov cl, [bx]
+    xor ch, ch
+
+    mov dx, di
+.Print_Nota:
+    jcxz .Nueva_Linea
+    mov dl, [di]       
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short .Print_Nota
+
+.Nueva_Linea:
+    ; Imprimir por consola
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+
+    inc si
+
+    ; trackear posicion en el array para saber cuales faltan
+    xor ax, ax
+    mov al, contador_Estud
+    sub ax, si
+    mov cx, ax
+    jcxz .done
+    jmp short .Siguiente_Estud
+
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+MostrarEstudiantes ENDP
 
 ; ------- Mostrar estadisticas -------
 Opcion2:
