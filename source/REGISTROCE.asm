@@ -68,7 +68,9 @@ NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
 
 notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)      
 
-NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0) 
+NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
+
+notas_val DW NUM_MAX_ESTU DUP(0) ; Arreglo para guardar los numeros flotantes en formato entero
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
@@ -284,8 +286,11 @@ O1_PedirNota:
     mov byte ptr [di+1], '0'
     mov byte ptr [di+2], '0'
     mov bx, 3                  ; próxima posición en tmp
-    add si, 3
-    jmp O1_CheckSiguiente
+    add si, 3    
+    mov al, [si]
+    cmp al, '.'
+    je O1_Mala_Nota
+    jmp O1_Anadir_Punto_Ceros
 
 O1_Nota_Inf_100:
     ; primer dígito 
