@@ -5,7 +5,7 @@
 .DATA
 
 ;--- CONSTANTES ---
-NUM_MAX_ESTU EQU 16 ; se definen 15 alumnos como maximo
+NUM_MAX_ESTU EQU 15 ; se definen 15 alumnos como maximo
 NOMBRE_LEN EQU 30; tamano maximo de char del nombre
 NOTA_LEN EQU 9; tamano de char de la nota
 tmpNota DB NOTA_LEN DUP(0)
@@ -53,6 +53,7 @@ msg_Ordenar_Asc_Desc DB 13, 10, 'Ingrese (1) si quiere ordenar ascendente o (2) 
 msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'
 
 ; INPUTS Y MEMORIA ----> DOS line input buffers (AH=0Ah): [max][count][data]
+
 buf_Contador    DB 3,0, 3 DUP(?)
 buf_Nombre     DB NOMBRE_LEN,0, NOMBRE_LEN DUP(?)
 bufNota    DB NOTA_LEN,0, NOTA_LEN DUP(?)
@@ -61,9 +62,12 @@ contador_Estud DB 0
 idx_actual DB 0
 
 
-nombres_Estud   DB NUM_MAX_ESTU*NOMBRE_LEN  DUP(0)
-NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
-notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)
+nombres_Estud DB NUM_MAX_ESTU*NOMBRE_LEN  DUP(0)
+
+NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)  
+
+notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)      
+
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0) 
 
 ; buffer para AH=0Ah: [max][count][data...]
@@ -215,7 +219,7 @@ _NomOK:
     mov bl, NOMBRE_LEN        ; Se guarda en bl el offset del largo del nombre
     mul bl                    ; AX = idx*30
     mov di, OFFSET nombres_Estud
-    add di, ax                ; DI = &nombres_Estud[idx*30]
+    add di, ax                ; DI = &nombres_Estud[idx*30] preparado para recibir los bytes del nombre
 
     ; len_nombre = min(buf_Nombre[1], NOMBRE_LEN)
     mov al, [buf_Nombre+1]
@@ -238,7 +242,7 @@ O1_LenNom_OK:
     mov si, OFFSET buf_Nombre+2
     xor cx, cx
     mov cl, dl
-    rep movsb ; copiar CX en bytes a ES
+    rep movsb ; Pasa CX bytes de DS:SI a ES:DI
 
     ; ----------- Pedir NOTA -----------
 O1_PedirNota:
