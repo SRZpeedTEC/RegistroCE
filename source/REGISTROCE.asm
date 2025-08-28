@@ -392,70 +392,46 @@ O1_Guardar_Nota:
     mov al, dh                 ; AL = idx otra vez
     xor ah, ah
     add bx, ax
-    mov [bx], dl
+    mov [bx], dl 
+    
+    mov bp, ax ; BP = idx guardamos idx para el futuro
+    shl bp, 1 ; Contemplamos offset de los DWORD (Ocupan 2 espacios de memoria cada parte low y high) 
+    
+    push ds
+    pop  es
 
     ; copiar tmpNota -> notas[idx] 
     mov si, OFFSET tmpNota
     rep movsb
     
         
-    mov byte ptr [tmpNota+dl], 0 
+    mov si, OFFSET tmpNota     ; SI = base
+    xor ax, ax                 ; AX = 0
+    mov al, dl                 ; AL = len (extiende a AX)
+    add si, ax                 ; SI = &tmpNota[len]
+    mov byte ptr [si], 0       ; tmpNota[len] = 0
+    
     mov si, OFFSET tmpNota     
-    call ParseNota_5dec     ; DX:AX = valor x100000  
-     
-    
+    call ParseNota_5dec     ; DX:AX = valor entero  
+          
+    ; Guardar LO
+    mov  bx, OFFSET notas_val_lo
+    add  bx, bp
+    mov  [bx], ax
 
-    ; calcular offset idx*2 para DW
-    
-    mov al, dh              ; AL = idx
-    xor ah, ah              ; AX = idx
-    mov di, ax
-    shl di, 1               ; DI = idx*2
-
-    ; guardar LO y HI
-    mov bx, OFFSET notas_val_lo
-    mov [bx+di], ax         ; LO
-    mov bx, OFFSET notas_val_hi
-    mov [bx+di], dx         ; HI   
+    ; Guardar HI
+    mov  bx, OFFSET notas_val_hi
+    add  bx, bp
+    mov  [bx], dx            ; HI (DX)  
                      
-                     
-    
-
+                        
     inc contador_Estud
     call MostrarEstudiantes
     jmp Menu_Principal 
     
     
     
-DWordMul10 PROC NEAR 
-    
-    ; usa: AX,BX,CX,DX
-    push bx
-    push cx
-
-    ; temp = val<<1
-    mov bx, ax
-    mov cx, dx
-    shl ax, 1
-    rcl dx, 1            ; DX:AX = val*2  (guárdalo en cx:bx)
-    xchg bx, ax          ; BX = low*2, AX = old low
-    xchg cx, dx          ; CX = high*2, DX = old high
-
-    ; val = old<<3  (<<1 ya tenemos arriba; hacemos <<2 más)
-    shl ax, 1
-    rcl dx, 1            ; <<1 adicional ? ahora val = old<<2
-    shl ax, 1
-    rcl dx, 1            ; <<1 adicional ? ahora val = old<<3
-
-    ; val = (old<<3) + (old<<1)  => *8 + *2 = *10
-    add ax, bx
-    adc dx, cx
-
-    pop cx
-    pop bx
-    ret
-DWordMul10 ENDP  
-
+  
 ParseNota_5dec PROC NEAR
     push bx
     push si
@@ -476,11 +452,12 @@ PN5_NextChar:
 
     ; bl debe ser '0'..'9' 
     sub bl, '0'         ; bl = dígito (0..9)
+    xor bh, bh
 
     ; val = val*10 + bl
     call DWordMul10 
        
-    xor bh, bh
+    
     add ax, bx          ; AX += dígito
     adc dx, 0           ; acarreo a DX si hay overflow de AX
 
@@ -491,7 +468,47 @@ PN5_Done:
     pop bx
     ret   
     
-ParseNota_5dec ENDP
+ParseNota_5dec ENDP 
+
+
+
+
+    
+    
+DWordMul10 PROC NEAR 
+    
+    ; usa: AX,BX,CX,DX
+    push bx
+    push cx
+
+    ; temp = val<<1
+    mov bx, ax
+    mov cx, dx
+    shl ax, 1
+    rcl dx, 1            ; DX:AX = num*2  con xchg intercambiamos valores
+    xchg bx, ax          ; BX = low*2, AX = original low
+    xchg cx, dx          ; CX = high*2, DX = original high
+
+     
+    shl ax, 1            ; Se desplaza un bit a la izquierda, esto equivale a hacer num*2
+    rcl dx, 1            ; Se va un bit de acarreo y lo obtenemos en dx por medio de rlc 
+    shl ax, 1            
+    rcl dx, 1            ;  num*2*2 = num*4
+    shl ax, 1
+    rcl dx, 1            ;  num*2*2*2 = num*8
+
+    ; val = (CX:BX) + (DX:AX)  = num*8 + num*2 = num*10
+    add ax, bx
+    adc dx, cx
+    
+    ; De esta manera se crea un numero a traves de potencias
+
+    pop cx
+    pop bx
+    ret
+DWordMul10 ENDP  
+
+
     
     
   
