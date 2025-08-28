@@ -70,7 +70,8 @@ notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)
 
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
 
-notas_val DW NUM_MAX_ESTU DUP(0) ; Arreglo para guardar los numeros flotantes en formato entero
+notas_val_lo DW NUM_MAX_ESTU DUP(0) ; Arreglo para guardar los numeros flotantes en formato entero 
+notas_val_hi DW NUM_MAX_ESTU DUP(0)
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
@@ -396,10 +397,104 @@ O1_Guardar_Nota:
     ; copiar tmpNota -> notas[idx] 
     mov si, OFFSET tmpNota
     rep movsb
+    
+        
+    mov byte ptr [tmpNota+dl], 0 
+    mov si, OFFSET tmpNota     
+    call ParseNota_5dec     ; DX:AX = valor x100000  
+     
+    
+
+    ; calcular offset idx*2 para DW
+    
+    mov al, dh              ; AL = idx
+    xor ah, ah              ; AX = idx
+    mov di, ax
+    shl di, 1               ; DI = idx*2
+
+    ; guardar LO y HI
+    mov bx, OFFSET notas_val_lo
+    mov [bx+di], ax         ; LO
+    mov bx, OFFSET notas_val_hi
+    mov [bx+di], dx         ; HI   
+                     
+                     
+    
 
     inc contador_Estud
     call MostrarEstudiantes
-    jmp Menu_Principal
+    jmp Menu_Principal 
+    
+    
+    
+DWordMul10 PROC NEAR 
+    
+    ; usa: AX,BX,CX,DX
+    push bx
+    push cx
+
+    ; temp = val<<1
+    mov bx, ax
+    mov cx, dx
+    shl ax, 1
+    rcl dx, 1            ; DX:AX = val*2  (guárdalo en cx:bx)
+    xchg bx, ax          ; BX = low*2, AX = old low
+    xchg cx, dx          ; CX = high*2, DX = old high
+
+    ; val = old<<3  (<<1 ya tenemos arriba; hacemos <<2 más)
+    shl ax, 1
+    rcl dx, 1            ; <<1 adicional ? ahora val = old<<2
+    shl ax, 1
+    rcl dx, 1            ; <<1 adicional ? ahora val = old<<3
+
+    ; val = (old<<3) + (old<<1)  => *8 + *2 = *10
+    add ax, bx
+    adc dx, cx
+
+    pop cx
+    pop bx
+    ret
+DWordMul10 ENDP  
+
+ParseNota_5dec PROC NEAR
+    push bx
+    push si
+
+    xor dx, dx          ; DX:AX = 0
+    xor ax, ax
+
+PN5_NextChar:
+    mov bl, [si]
+    cmp bl, 13          ; por si llegara CR 
+    je  PN5_Done
+    cmp bl, 0
+    je  PN5_Done
+    inc si
+
+    cmp bl, '.'         ; omitir el punto
+    je  PN5_NextChar
+
+    ; bl debe ser '0'..'9' 
+    sub bl, '0'         ; bl = dígito (0..9)
+
+    ; val = val*10 + bl
+    call DWordMul10 
+       
+    xor bh, bh
+    add ax, bx          ; AX += dígito
+    adc dx, 0           ; acarreo a DX si hay overflow de AX
+
+    jmp short PN5_NextChar
+
+PN5_Done:
+    pop si
+    pop bx
+    ret   
+    
+ParseNota_5dec ENDP
+    
+    
+  
     
 O1_Mala_Nota:
     ; repreguntar si es invalida
