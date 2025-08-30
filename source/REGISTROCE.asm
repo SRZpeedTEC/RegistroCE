@@ -50,7 +50,12 @@ msg_Buscar_Idx DB 13, 10, 'Ingrese el valor de la posicion del estudiante que de
 msg_Ordenar_Asc_Desc DB 13, 10, 'Ingrese (1) si quiere ordenar ascendente o (2) descendente', 13, 10, '$'
 
 ;mensajes de salir programa
-msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'
+msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'  
+
+; --- mensaje minimo ordenamiento ---
+msg_No_Suf_Orden DB 13,10,'No hay suficientes estudiantes para ordenar (se requieren al menos 2).',13,10,'$'
+
+
 
 ; INPUTS Y MEMORIA ----> DOS line input buffers (AH=0Ah): [max][count][data]
 
@@ -75,7 +80,13 @@ notas_val_hi DW NUM_MAX_ESTU DUP(0)
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
-buf_Opcion   DB 2,0, 2 DUP(0)
+buf_Opcion   DB 2,0, 2 DUP(0) 
+
+; buffer para leer opcion de ordenamiento
+buf_Orden DB 2,0, 2 DUP(0)
+
+; 0 = ascendente, 1 = descendente
+orden_modo DB 0
 
 
 .CODE
@@ -659,10 +670,68 @@ Opcion3:
 
 ; ------- Ordenar calificaciones -------
 Opcion4:
+    mov al, contador_Estud
+    cmp al, 2
+    jb O4_NoSuficientes
+
+O4_PreguntarModo:
     mov dx, OFFSET msg_Ordenar_Asc_Desc
     mov ah, 09h
     int 21h
+    
+    mov ah, 0Ch
+    mov al, 0Ah
+    mov dx, OFFSET buf_Orden
+    int 21h   
+    
+    mov al, [buf_Orden+1]
+    cmp al, 1
+    jb O4_PreguntarModo
+    
+    mov bl, [buf_Orden+2]
+    
+    cmp bl, '1' 
+    je O4_Asc
+    cmp bl, '2'
+    je O4_Desc
+    jmp O4_PreguntarModo
+
+O4_Asc: 
+    mov byte ptr orden_modo, 0 
+    mov dl, '1'
+    mov ah, 02h
+    int 21h
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+    ;aqui va el bubble
+    jmp Menu_Principal  
+
+O4_Desc: 
+    mov byte ptr orden_modo, 1
+    mov dl, '1'
+    mov ah, 02h
+    int 21h
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+    ;aqui va el bubble
+    jmp Menu_Principal  
+    
+O4_NoSuficientes:
+    mov dx, OFFSET msg_No_Suf_Orden
+    mov ah, 09h
+    int 21h
     jmp Menu_Principal
+    
+    
+
 
 
 ; ------- Terminar programa -------
