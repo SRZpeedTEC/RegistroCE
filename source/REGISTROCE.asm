@@ -726,7 +726,7 @@ SumNotas32 PROC NEAR
     ; CX = Cantidad de estudiantes
     
     xor cx, cx
-    mov cl, contador_Estud 
+    mov cl, contador_Estud ; Cargamos el contador
     jcxz SumNotasDone
     
     mov si, OFFSET notas_val_lo
@@ -767,35 +767,111 @@ SumNotas32 ENDP
 
 ; 32/16 sin signo, con resto
 ; IN : DX:AX = dividendo (32-bit)
-;      CX    = divisor  (16-bit, ?0)
+;      CX    = divisor  (16-bit)
 ; OUT: DX:AX = cociente (32-bit)
-;      CX    = resto    (0..divisor-1)
+;      CX    = resto    
+
 Div32by16U PROC NEAR
     push bx
     push bp
     mov  bp, cx        ; divisor
     mov  bx, ax        ; guardar low original
 
-    ; 1) dividir parte alta
+    ; dividimos parte alta
     mov  ax, dx
     xor  dx, dx
-    div  bp            ; AX = q_hi, DX = r1
-    mov  cx, ax        ; CX = q_hi
+    div  bp            ; AX = c_hi, DX = r1
+    mov  cx, ax        ; CX = c_hi
 
-    ; 2) dividir (r1:low) -> q_lo y resto
+    ; dividimos parte baja : residuo1 
     mov  ax, bx        ; AX = low original
     ; DX ya es r1
     div  bp            ; AX = q_lo, DX = resto
 
-    ; 3) armar salida y NO perder el resto
-    xchg dx, cx        ; DX = q_hi,  CX = resto
-    ; AX ya es q_lo
-
+    ; Armamos el numero apartir de cocientes c_hi:c_lo
+    xchg dx, cx        ; DX = c_hi,  CX = resto
+    
+    ; AX ya es c_lo
     pop  bp
     pop  bx
-    ret
+    ret    
+    
 Div32by16U ENDP
  
+
+
+
+; IN : DX:AX = valor en escala x100000
+; OUT: imprime EEE.ddddd
+; REQ: DWordDivU16Rem y PrintU16_AX
+PrintFixed5_DXAX PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; c1 = N/10000 y r1 = N%10000 
+    mov cx, 10000
+    call Div32by16U ; DX:AX = c1,  CX = r1
+    mov si, cx ; SI = r1 
+
+    ; c2 = c1/10 y r2 = c1%10 
+    mov cx, 10
+    call Div32by16U ; DX:AX = c2,  CX = r2
+    mov bx, cx ; BX = r2 
+
+    ; Se imprime parte entera c2 
+    ; c2 esta en DX:AX
+    push dx                   
+    call PrintU16_AX
+    pop  dx
+
+    ; Agregamos el punto
+    mov dl, '.'
+    mov ah, 02h
+    int 21h
+
+    ; Reconstruimos los decimales a partir de los residuos almacenados anteriormente = r2*10000 + r1 en DX:AX
+    mov ax, bx ; AX = r2
+    mov di, 10000
+    mul di ; DX:AX = r2*10000   
+    add ax, si ; + r1
+    adc dx, 0 ; DX:AX = residuo 
+
+    ; Sacar 5 digitos del residuo 
+    mov bx, OFFSET digits_buf ; base del buffer
+    mov di, 4 ; De derecha a izquierda                  
+    mov bp, 5 ; Contador de 5 digitos
+pf5_loop:
+    mov cx, 10
+    call Div32by16U ; (DX:AX)/10 vamos escribiendo el numero en potencias de 10
+    add cl, '0' ; Convertimos en ASCII
+    mov [bx+di], cl ; 
+    dec di
+    dec bp
+    jnz pf5_loop
+
+    ; Se imprimen los 5 bytes
+    mov cx, 5
+    mov di, 0 
+    
+pf5_out:
+    mov dl, [bx+di]             ; [BX+DI] válido
+    mov ah, 02h
+    int 21h
+    inc di
+    loop pf5_out
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+PrintFixed5_DXAX ENDP
 
 ; IN : AX = valor (0..65535)
 ; USA: BX,CX,DX,SI  (digits_buf de 12 bytes)
@@ -809,7 +885,7 @@ PrintU16_AX PROC NEAR
     add si, 12         ; apuntar al final del buffer
     mov byte ptr [si-1], 0  ; terminador opcional
 
-    xor cx, cx         ; contador de dígitos
+    xor cx, cx ; contador de dígitos
     cmp ax, 0
     jne pu16_loop
     ; caso AX=0
@@ -821,8 +897,8 @@ PrintU16_AX PROC NEAR
 pu16_loop:
     xor dx, dx
     mov bx, 10
-    div bx             ; AX = AX/10, DX = AX%10
-    add dl, '0'        ; dígito ASCII
+    div bx ; AX = AX/10, DX = AX%10
+    add dl, '0' ; digito ASCII
     dec si
     mov [si], dl
     inc cx
@@ -846,77 +922,6 @@ pu16_done:
     pop bx
     ret
 PrintU16_AX ENDP
-
-; IN : DX:AX = valor en escala x100000
-; OUT: imprime EEE.ddddd
-; REQ: DWordDivU16Rem y PrintU16_AX
-PrintFixed5_DXAX PROC NEAR
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    ; ---- 1) q1 = N/10000 ; r1 = N%10000 ----
-    mov cx, 10000
-    call Div32by16U             ; DX:AX = q1,  CX = r1
-    mov si, cx                ; SI = r1 (0..9999)
-
-    ; ---- 2) q2 = q1/10 ; r2 = q1%10 ----
-    mov cx, 10
-    call Div32by16U             ; DX:AX = q2,  CX = r2
-    mov bx, cx                ; BX = r2 (0..9)
-
-    ; ---- 3) Imprimir parte entera (q2) ----
-    ; q2 está en DX:AX; para 0..100 basta AX
-    push dx                   ; por prolijidad
-    call PrintU16_AX
-    pop  dx
-
-    ; punto
-    mov dl, '.'
-    mov ah, 02h
-    int 21h
-
-    ; ---- 4) Reconstruir RESTO32 = r2*10000 + r1 en DX:AX ----
-    mov ax, bx                ; AX = r2
-    mov di, 10000
-    mul di                    ; DX:AX = r2*10000   (0..90000)
-    add ax, si                ; + r1
-    adc dx, 0                 ; DX:AX = resto32 (0..99999)
-
-    ; ----- 5) Sacar 5 dígitos del RESTO32 (dividiendo entre 10) -----
-    mov bx, OFFSET digits_buf   ; base del buffer
-    mov di, 4                   ; escribimos de derecha a izquierda (pos 4..0)
-    mov bp, 5                   ; contador de 5 dígitos
-pf5_loop:
-    mov cx, 10
-    call Div32by16U               ; (DX:AX)/10 -> cociente en DX:AX, resto en CX (0..9)
-    add cl, '0'
-    mov [bx+di], cl             ; [BX+DI] sí es válido
-    dec di
-    dec bp
-    jnz pf5_loop
-
-    ; imprimir los 5 bytes
-    mov cx, 5
-    mov di, 0
-pf5_out:
-    mov dl, [bx+di]             ; [BX+DI] válido
-    mov ah, 02h
-    int 21h
-    inc di
-    loop pf5_out
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-PrintFixed5_DXAX ENDP
       
 
 
