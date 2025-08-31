@@ -24,6 +24,7 @@ msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5): $'
 
 ;mensajes de error
 msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-5', 13, 10, '$'
+msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. No existe un estudiante con ese indice', 13, 10, '$'
 
 ;mensajes de ingresar estudiante
 msg_In_Nombre_Estud DB 13, 10, 'Ingrese el nombre del estudiante o ingrese 0 para salir al menu:', 13, 10, '$'
@@ -570,13 +571,14 @@ MostrarEstudiantes PROC NEAR
     int 21h
 
     xor cx, cx
-    mov cl, contador_Estud     ; CL = cantidad (8 bits)
+    mov cl, contador_Estud ; CL = cantidad (8 bits)
     cmp cx, 0
     je  MS_Done
 
-    xor si, si                 ; SI = idx
+    xor si, si ; SI = idx
 
-MS_Siguiente_Estud:
+MS_Siguiente_Estud:  
+
     ; ---- imprimir nombre ----
     ; DI = &nombres_Estud[idx * NOMBRE_LEN]
     mov ax, si
@@ -643,7 +645,7 @@ MS_Nueva_Linea:
 
     inc si
 
-    ; quedan?  (contador_Estud - si)
+    ; quedan estudiantes?
     xor ax, ax
     mov al, contador_Estud
     sub ax, si
@@ -831,22 +833,22 @@ SumNotas32 ENDP
 Div32by16U PROC NEAR
     push bx
     push bp
-    mov  bp, cx        ; divisor
-    mov  bx, ax        ; guardar low original
+    mov  bp, cx ; divisor
+    mov  bx, ax ; guardar low original
 
     ; dividimos parte alta
     mov  ax, dx
     xor  dx, dx
-    div  bp            ; AX = c_hi, DX = r1
-    mov  cx, ax        ; CX = c_hi
+    div  bp ; AX = c_hi, DX = r1
+    mov  cx, ax ; CX = c_hi
 
     ; dividimos parte baja : residuo1 
-    mov  ax, bx        ; AX = low original
+    mov  ax, bx ; AX = low original
     ; DX ya es r1
-    div  bp            ; AX = q_lo, DX = resto
+    div  bp ; AX = q_lo, DX = resto
 
     ; Armamos el numero apartir de cocientes c_hi:c_lo
-    xchg dx, cx        ; DX = c_hi,  CX = resto
+    xchg dx, cx ; DX = c_hi,  CX = resto
     
     ; AX ya es c_lo
     pop  bp
@@ -1068,13 +1070,161 @@ PN_end:
 PrintNumber_DXAX ENDP
       
 
+; Buscar estudiante por indice
+Opcion3:     
 
-; ------- Buscar estudiante por idx -------
-Opcion3:
-    mov dx, OFFSET msg_Buscar_Idx
-    mov ah, 09h
-    int 21h
-    jmp Menu_Principal
+    ; si no hay estudiantes volvemos al menu
+    mov  al, contador_Estud
+    cmp  al, 0
+    je   Menu_Principal
+
+O3_Leer:
+    mov  dx, OFFSET msg_Buscar_Idx
+    mov  ah, 09h
+    int  21h
+
+    ; leemos el digito ingresado
+    mov  ah, 0Ch
+    mov  al, 0Ah
+    mov  dx, OFFSET buf_Contador
+    int  21h
+
+    ; Comprobamos que haya al menos un caracter
+    mov  al, [buf_Contador+1] ; len
+    cmp  al, 1
+    jb   O3_Leer
+
+    ; convertimos a ASCII  
+    xor  ax, ax
+    mov  bl, [buf_Contador+2] ; primer digito
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O3_Invalido
+    mov  al, bl 
+
+    mov  cl, [buf_Contador+1] ; len
+    cmp  cl, 1
+    je   O3_TieneUno
+
+    ; hay 2 digitos: AL = (d1*10) + d2
+    mov  bh, 10
+    mul  bh ; AX = AL*10
+    mov  bl, [buf_Contador+3]
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O3_Invalido
+    add  al, bl
+    jmp  short O3_TieneValor
+
+O3_TieneUno:        
+    
+    
+O3_TieneValor:
+
+    ; Comprobamos que sea rango valido 1 hasta contadorEstud
+    cmp  al, 1
+    jb   O3_Invalido
+    cmp  al, contador_Estud
+    ja   O3_Invalido
+
+    ; Convertir a indice
+    dec  al
+
+    ; Se imprime nombre nota del indice AL
+    call PrintStudentAtIndex
+
+    jmp  Menu_Principal
+
+O3_Invalido: 
+
+    ; Mandamos el mensaje de error
+    mov  dx, OFFSET msg_Error_Menu
+    mov  ah, 09h
+    int  21h
+    jmp  O3_Leer
+
+
+
+; ---------------- FUNCION PRINTEAR SEGUN INDEX ---------------------- 
+ 
+
+PrintStudentAtIndex PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    xor  ah, ah
+    mov  si, ax ; SI = idx 
+
+    ; Se imprime el nombre segun los offset y el idx
+    mov  ax, si
+    mov  bx, NOMBRE_LEN
+    mul  bx ; AX = idx*NOMBRE_LEN
+    mov  di, OFFSET nombres_Estud
+    add  di, ax ; DI = &nombres_Estud[idx*30]
+
+    mov  bx, OFFSET NOMBRE_LEN_ARR
+    add  bx, si
+    mov  cl, [bx] ; CL = len(nombre)
+    xor  ch, ch
+
+PSI_PrintNombre:
+    jcxz PSI_Next
+    mov  dl, [di]
+    mov  ah, 02h
+    int  21h
+    inc  di
+    dec  cx
+    jmp  short PSI_PrintNombre
+
+PSI_Next:
+    ; Agregamos un espacio
+    mov  dl, ' '
+    mov  ah, 02h
+    int  21h
+
+    ; Se imprime la nota con la misma logica anterior
+    mov  ax, si
+    mov  bx, NOTA_LEN
+    mul  bx ; AX = idx*NOTA_LEN
+    mov  di, OFFSET notas
+    add  di, ax ; DI = &notas[idx*9]
+
+    mov  bx, OFFSET NOTAS_LEN_ARR
+    add  bx, si
+    mov  cl, [bx]              ; CL = len(nota)
+    xor  ch, ch
+
+PSI_PrintNota:
+    jcxz PSI_NewLine
+    mov  dl, [di]
+    mov  ah, 02h
+    int  21h
+    inc  di
+    dec  cx
+    jmp  short PSI_PrintNota
+
+PSI_NewLine: 
+
+    mov  dl, 13
+    mov  ah, 02h
+    int  21h
+    mov  dl, 10
+    mov  ah, 02h
+    int  21h
+
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
+    
+PrintStudentAtIndex ENDP
 
 
 ; ------- Ordenar calificaciones -------
