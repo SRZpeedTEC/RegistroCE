@@ -71,7 +71,9 @@ notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
 
 
-; ----------------- VARIABLES PARA ESTADISTICAS
+; ----------------- VARIABLES PARA ESTADISTICAS ----------------------------
+
+; PROMEDIO
 
 notas_val_lo DW NUM_MAX_ESTU DUP(0) ; Arreglo para guardar los numeros flotantes en formato entero 
 notas_val_hi DW NUM_MAX_ESTU DUP(0)   
@@ -80,7 +82,25 @@ sum_notas_lo DW 0
 sum_notas_hi DW 0
 
 promedio_lo DW 0
-promedio_hi DW 0 
+promedio_hi DW 0  
+
+
+; MAX Y MIN
+
+max_lo DW 0
+max_hi DW 0
+
+min_lo DW 0
+min_hi DW 0
+
+; APROBADOS Y DESAPROBADOS
+
+APROB_HI   EQU 006Ah ; Valor a comparar
+APROB_LO   EQU 0CFC0h
+
+aprob_cnt  DB 0
+desap_cnt  DB 0
+
 
 digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir 
 
@@ -435,7 +455,10 @@ O1_Guardar_Nota:
     add  bx, bp
     mov  [bx], dx            ; HI (DX)  
                      
-                        
+    call UpdateAprobDesap ; Actualizamos aprob y desap
+    call UpdateMinMax ; Actualizamos Max y Min
+    
+                      
     inc contador_Estud
     call MostrarEstudiantes
     jmp Menu_Principal 
@@ -658,9 +681,65 @@ Opcion2:
     ; recuperar promedio y ahora sí formatear
     pop ax
     pop dx
-    call PrintFixed5_DXAX
+    call PrintNumber_DXAX
 
-    ; salto de línea
+    ; Se guarda el promedio
+    mov promedio_lo, ax
+    mov promedio_hi, dx
+    
+    ; Nota Maxima:
+    mov dx, OFFSET msg_Stats_Nota_Max
+    mov ah, 09h
+    int 21h
+    mov ax, max_lo
+    mov dx, max_hi
+    call PrintNumber_DXAX
+    
+
+    ; Nota Minima:
+    mov dx, OFFSET msg_Stats_Nota_Min
+    mov ah, 09h
+    int 21h
+    mov ax, min_lo
+    mov dx, min_hi
+    call PrintNumber_DXAX
+   
+    ; Cantidad de aprobados
+    mov dx, OFFSET msg_Stats_Aprob
+    mov ah, 09h
+    int 21h
+    mov al, aprob_cnt
+    call PrintCountFromAL
+
+
+    ; % de aprobacion
+    mov dx, OFFSET msg_Stats_Aprob_Porc
+    mov ah, 09h
+    int 21h
+    mov cl, contador_Estud ; total en CL/CX
+    mov al, aprob_cnt
+    call PercentFromCounts ; DX:AX = porcentaje x100000
+    call PrintNumber_DXAX
+    
+    
+
+    ; Cantidad de desaprobados
+    mov dx, OFFSET msg_Stats_Desaprob
+    mov ah, 09h
+    int 21h
+    mov al, desap_cnt
+    call PrintCountFromAL
+
+
+    ; % de desaprobacion
+    mov dx, OFFSET msg_Stats_Desaprob_Porc
+    mov ah, 09h
+    int 21h
+    mov cl, contador_Estud
+    mov al, desap_cnt
+    call PercentFromCounts
+    call PrintNumber_DXAX 
+    
     mov dl, 13
     mov ah, 02h
     int 21h
@@ -668,34 +747,18 @@ Opcion2:
     mov ah, 02h
     int 21h
 
-    ; (si luego necesitas guardarlo)
-    mov promedio_lo, ax
-    mov promedio_hi, dx
-
-    ; el resto de mensajes:
-    mov dx, OFFSET msg_Stats_Aprob
-    mov ah, 09h
-    int 21h
-    mov dx, OFFSET msg_Stats_Aprob_Porc
-    mov ah, 09h
-    int 21h
-    mov dx, OFFSET msg_Stats_Desaprob
-    mov ah, 09h
-    int 21h
-    mov dx, OFFSET msg_Stats_Desaprob_Porc
-    mov ah, 09h
-    int 21h
 
     jmp Menu_Principal
 
-_NoHayEstudiantes:
-    ; si no hay datos, imprime 0.00000
+_NoHayEstudiantes:   
+
+    ; si no hay datos, se imprime 0.00000
     mov dx, OFFSET msg_Stats_Promedio
     mov ah, 09h
     int 21h
     xor dx, dx
     xor ax, ax
-    call PrintFixed5_DXAX
+    call PrintNumber_DXAX
     mov dl, 13
     mov ah, 02h
     int 21h
@@ -763,13 +826,7 @@ SumNotasDone:
     ret    
     
 SumNotas32 ENDP 
-
-
-; 32/16 sin signo, con resto
-; IN : DX:AX = dividendo (32-bit)
-;      CX    = divisor  (16-bit)
-; OUT: DX:AX = cociente (32-bit)
-;      CX    = resto    
+   
 
 Div32by16U PROC NEAR
     push bx
@@ -798,130 +855,217 @@ Div32by16U PROC NEAR
     
 Div32by16U ENDP
  
+ 
+ 
+   
+
+UpdateMinMax PROC NEAR ; Comparamos valor de entrada con los actuales almacenados
+    push bx
+
+    ; Caso: Primera nota
+    mov  bl, contador_Estud
+    cmp  bl, 0
+    jne  nota_not_first
+    
+    ; inicializamos ambas variables con la primera nota
+    mov  max_lo, ax
+    mov  max_hi, dx
+    mov  min_lo, ax
+    mov  min_hi, dx
+    jmp  nota_done
+
+nota_not_first:
+    
+    mov  bx, max_hi
+    cmp  dx, bx ; Comparamos partes alta
+    ja   nota_set_max ; Es mayor al anterior
+    jb   nota_check_min ; Comprobamos si es menor que el minimo
+    
+    ; si hi iguales entonces se compara low
+    mov  bx, max_lo
+    cmp  ax, bx
+    jbe  nota_check_min 
+    
+nota_set_max:
+    mov  max_lo, ax
+    mov  max_hi, dx
+
+nota_check_min:
+    
+    mov  bx, min_hi ; Misma logica anterior
+    cmp  dx, bx
+    jb   nota_set_min          
+    ja   nota_done             
+    
+    mov  bx, min_lo
+    cmp  ax, bx
+    jae  nota_done 
+    
+nota_set_min:
+    mov  min_lo, ax
+    mov  min_hi, dx
+
+nota_done:
+    pop  bx
+    ret
+UpdateMinMax ENDP 
 
 
+UpdateAprobDesap PROC NEAR
+    push bx
 
-; IN : DX:AX = valor en escala x100000
-; OUT: imprime EEE.ddddd
-; REQ: DWordDivU16Rem y PrintU16_AX
-PrintFixed5_DXAX PROC NEAR
+    ; comparamos DX:AX (nuestro numero ingresado con 7000000)
+    mov  bx, APROB_HI
+    cmp  dx, bx ; Comparamos parte alta
+    ja   _aprob                 
+    jb   _desap                 
+    ; hi iguales comparamos parte baja
+    mov  bx, APROB_LO
+    cmp  ax, bx
+    jae  _aprob
+         
+_desap:
+    inc  desap_cnt
+    jmp  short _fin 
+    
+_aprob:
+    inc  aprob_cnt 
+    
+_fin:
+    pop  bx
+    ret        
+    
+UpdateAprobDesap ENDP 
+
+  
+; Funcion que retorna porcentaje
+PercentFromCounts PROC NEAR
+    push si
+    xor ah, ah ; AX = count
+    xor dx, dx ; DX:AX = count 
+    mov si, 7   
+    
+_pfc_mul10:
+    call DWordMul10 ; escalamos a e7
+    dec si
+    jnz _pfc_mul10 
+    
+    
+    call Div32by16U ; DX:AX = (count*1e7)/total = %e7
+    pop si
+    ret    
+    
+PercentFromCounts ENDP    
+
+
+PrintCountFromAL PROC NEAR
+    push si
+    xor ah, ah ; AX = AL
+    xor dx, dx ; DX:AX = count
+
+    ; escalamos a e5
+    mov si, 5  
+    
+.pc_mul10:
+
+    call DWordMul10
+    dec si
+    jnz .pc_mul10
+
+    
+    call PrintNumber_DXAX  ; De esta manera ya podemos reutilizar nuestra funcion
+    pop si
+    ret      
+    
+PrintCountFromAL ENDP
+
+
+; Convierte numero 82393492 en formato 82,393492 
+   
+PrintNumber_DXAX PROC NEAR
     push ax
     push bx
     push cx
     push dx
     push si
     push di
+    push bp
 
-    ; c1 = N/10000 y r1 = N%10000 
-    mov cx, 10000
-    call Div32by16U ; DX:AX = c1,  CX = r1
-    mov si, cx ; SI = r1 
+    mov  bx, OFFSET digits_buf ; base del buffer (12 bytes)
+    mov  di, 11 ; escribimos desde el final 
+    xor  bp, bp                  
 
-    ; c2 = c1/10 y r2 = c1%10 
-    mov cx, 10
-    call Div32by16U ; DX:AX = c2,  CX = r2
-    mov bx, cx ; BX = r2 
-
-    ; Se imprime parte entera c2 
-    ; c2 esta en DX:AX
-    push dx                   
-    call PrintU16_AX
-    pop  dx
-
-    ; Agregamos el punto
-    mov dl, '.'
-    mov ah, 02h
-    int 21h
-
-    ; Reconstruimos los decimales a partir de los residuos almacenados anteriormente = r2*10000 + r1 en DX:AX
-    mov ax, bx ; AX = r2
-    mov di, 10000
-    mul di ; DX:AX = r2*10000   
-    add ax, si ; + r1
-    adc dx, 0 ; DX:AX = residuo 
-
-    ; Sacar 5 digitos del residuo 
-    mov bx, OFFSET digits_buf ; base del buffer
-    mov di, 4 ; De derecha a izquierda                  
-    mov bp, 5 ; Contador de 5 digitos
-pf5_loop:
-    mov cx, 10
-    call Div32by16U ; (DX:AX)/10 vamos escribiendo el numero en potencias de 10
-    add cl, '0' ; Convertimos en ASCII
-    mov [bx+di], cl ; 
-    dec di
-    dec bp
-    jnz pf5_loop
-
-    ; Se imprimen los 5 bytes
-    mov cx, 5
-    mov di, 0 
+    ; 5 decimales: N % 10, N/=10 
+    mov  si, 5 
     
-pf5_out:
-    mov dl, [bx+di]             ; [BX+DI] válido
-    mov ah, 02h
-    int 21h
-    inc di
-    loop pf5_out
+PN_decimal:
+    mov  cx, 10
+    call Div32by16U ; (DX:AX)/10 = cociente en DX:AX y residuo en CX = N%10
+    add  cl, '0' ; a ASCII
+    mov  [bx+di], cl ; escribimos en el buffer de derecha a izquierda
+    dec  di
+    dec  si
+    jnz  PN_decimal
 
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-PrintFixed5_DXAX ENDP
+    ; Colocamos el punto despues de colocado los 5 decimales
+    
+    mov  byte ptr [bx+di], '.'
+    dec  di
 
-; IN : AX = valor (0..65535)
-; USA: BX,CX,DX,SI  (digits_buf de 12 bytes)
-PrintU16_AX PROC NEAR
-    push bx
-    push cx
-    push dx
-    push si
+    ;  rellenamos con la parte entera 
+PN_int_loop:
 
-    mov si, OFFSET digits_buf
-    add si, 12         ; apuntar al final del buffer
-    mov byte ptr [si-1], 0  ; terminador opcional
+    ; si el cociente es 0, se acaba
+    cmp  dx, 0
+    jne  PN_do_div
+    cmp  ax, 0
+    je   PN_int_done  
+    
+PN_do_div:
+    mov  cx, 10
+    call Div32by16U ; (DX:AX)/10
+    add  cl, '0'
+    mov  [bx+di], cl
+    dec  di
+    mov  bp, 1 ; flag para verificar enteros
+    jmp  PN_int_loop
 
-    xor cx, cx ; contador de dígitos
-    cmp ax, 0
-    jne pu16_loop
-    ; caso AX=0
-    mov dl, '0'
-    mov ah, 02h
-    int 21h
-    jmp pu16_done
+PN_int_done: 
 
-pu16_loop:
-    xor dx, dx
-    mov bx, 10
-    div bx ; AX = AX/10, DX = AX%10
-    add dl, '0' ; digito ASCII
-    dec si
-    mov [si], dl
-    inc cx
-    cmp ax, 0
-    jne pu16_loop
+    ; si no hubo parte entera, imprime '0'
+    cmp  bp, 1
+    je   PN_print
+    mov  byte ptr [bx+di], '0'
+    dec  di
 
-    ; imprimir desde [si] cx bytes
-pu16_print:
-    jcxz pu16_done
-    mov dl, [si]
-    mov ah, 02h
-    int 21h
-    inc si
-    dec cx
-    jmp pu16_print
+PN_print:
+    ; se imprime desde [bx+di+1] hasta el final del buffer usado
+    mov  si, bx
+    add  si, di ; SI = bx + di
+    inc  si ; SI = inicio de la cadena
+    mov  cx, bx
+    add  cx, 12 ; CX = fin del buffer (bx+12)
 
-pu16_done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-PrintU16_AX ENDP
+PN_out:
+    cmp  si, cx
+    jae  PN_end
+    mov  dl, [si]
+    mov  ah, 02h
+    int  21h
+    inc  si
+    jmp  PN_out
+
+PN_end:
+    pop  bp ; Retornamos todo a la normalidad
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret    
+    
+PrintNumber_DXAX ENDP
       
 
 
