@@ -641,14 +641,10 @@ MostrarEstudiantes ENDP
 
 ; ------- Mostrar estadisticas -------
 Opcion2:
-    call SumNotas32          ; DX:AX = suma (escala x100000)
-
-    xor cx, cx
-    mov cl, contador_Estud   ; divisor
+    call SumNotas32
+    mov  cl, contador_Estud
     jcxz _NoHayEstudiantes
-
-    ; dividir suma / n  -> DX:AX = promedio (escala x100000)
-    call DWordDivU16
+    call Div32by16U      
 
     ; guardar promedio mientras imprimes el texto
     push dx
@@ -769,70 +765,37 @@ SumNotasDone:
 SumNotas32 ENDP 
 
 
-DWordDivU16 PROC NEAR
-    
-    push bx
-    push bp  
-    
-    mov bp, cx   ; divisor
-    mov bx, ax   ; guardamos low original en bx
-    
-    
-    ; Dividimos primero parte alta
-    
-    mov ax, dx
-    xor dx, dx
-    div bp     ; AX = q_hi, DX = r1
-    mov cx, ax ; CX = q_hi
-    
-    ; Combinamos el resto con la parte baja original
-    
-    mov ax, bx ; devolvemos el low original a AX
-    div bp ; AX = q_lo, DX = Resto
-    
-    
-    ; Cociente completo
-    
-    mov dx, cx ; DX = q_hi 
-    
-    ; AX = q_lo, DX = q_hi
-    ; resto queda en DX del DIV, lo guardamos en CX
-    
-    mov cx, dx
-    
-    pop bp
-    pop bx
-    ret
-    
-DWordDivU16 ENDP
-
-;IN : DX:AX = valor (escala x100000)
-;      CX    = divisor (16-bit)
+; 32/16 sin signo, con resto
+; IN : DX:AX = dividendo (32-bit)
+;      CX    = divisor  (16-bit, ?0)
 ; OUT: DX:AX = cociente (32-bit)
-;      CX    = resto (0..divisor-1)
-DWordDivU16Rem PROC NEAR
+;      CX    = resto    (0..divisor-1)
+Div32by16U PROC NEAR
     push bx
     push bp
+    mov  bp, cx        ; divisor
+    mov  bx, ax        ; guardar low original
 
-    mov bp, cx       ; divisor
-    mov bx, ax       ; low original
+    ; 1) dividir parte alta
+    mov  ax, dx
+    xor  dx, dx
+    div  bp            ; AX = q_hi, DX = r1
+    mov  cx, ax        ; CX = q_hi
 
-    ; dividir parte alta
-    mov ax, dx
-    xor dx, dx
-    div bp           ; AX = q_hi, DX = r1
-    push ax          ; guardar q_hi
-    mov ax, bx       ; low original
-    div bp           ; AX = q_lo, DX = resto
-    mov cx, dx       ; CX = resto
+    ; 2) dividir (r1:low) -> q_lo y resto
+    mov  ax, bx        ; AX = low original
+    ; DX ya es r1
+    div  bp            ; AX = q_lo, DX = resto
 
-    pop dx           ; DX = q_hi
-    ; AX = q_lo
+    ; 3) armar salida y NO perder el resto
+    xchg dx, cx        ; DX = q_hi,  CX = resto
+    ; AX ya es q_lo
 
-    pop bp
-    pop bx
+    pop  bp
+    pop  bx
     ret
-DWordDivU16Rem ENDP 
+Div32by16U ENDP
+ 
 
 ; IN : AX = valor (0..65535)
 ; USA: BX,CX,DX,SI  (digits_buf de 12 bytes)
@@ -897,12 +860,12 @@ PrintFixed5_DXAX PROC NEAR
 
     ; ---- 1) q1 = N/10000 ; r1 = N%10000 ----
     mov cx, 10000
-    call DWordDivU16Rem       ; DX:AX = q1,  CX = r1
+    call Div32by16U             ; DX:AX = q1,  CX = r1
     mov si, cx                ; SI = r1 (0..9999)
 
     ; ---- 2) q2 = q1/10 ; r2 = q1%10 ----
     mov cx, 10
-    call DWordDivU16Rem       ; DX:AX = q2,  CX = r2
+    call Div32by16U             ; DX:AX = q2,  CX = r2
     mov bx, cx                ; BX = r2 (0..9)
 
     ; ---- 3) Imprimir parte entera (q2) ----
@@ -929,7 +892,7 @@ PrintFixed5_DXAX PROC NEAR
     mov bp, 5                   ; contador de 5 dígitos
 pf5_loop:
     mov cx, 10
-    call DWordDivU16Rem         ; (DX:AX)/10 -> cociente en DX:AX, resto en CX (0..9)
+    call Div32by16U               ; (DX:AX)/10 -> cociente en DX:AX, resto en CX (0..9)
     add cl, '0'
     mov [bx+di], cl             ; [BX+DI] sí es válido
     dec di
@@ -954,52 +917,7 @@ pf5_out:
     pop ax
     ret
 PrintFixed5_DXAX ENDP
-
-
-; IN : DX:AX = valor (escala x100000)
-; OUT: DX:AX = cociente (entero)
-;      CX    = resto (0..99999)
-; IN : DX:AX = valor (escala x100000)
-; OUT: DX:AX = cociente (entero)
-;      CX    = resto (0..99999)
-DivBy100000 PROC NEAR
-    push bx
-    push si
-
-    ; 1) /10000  -> q1 y r1
-    mov cx, 10000
-    call DWordDivU16Rem      ; DX:AX = q1,  CX = r1
-    mov si, cx               ; SI = r1 (0..9999)
-
-    ; 2) q1 / 10 -> q2 y r2
-    mov cx, 10
-    call DWordDivU16Rem      ; DX:AX = q2,  CX = r2
-
-    ; Guarda q2 (cociente final)
-    push dx                  ; q2_hi
-    push ax                  ; q2_lo
-
-    ; resto = r2*10000 + r1
-    ; (r2 <= 9, cabe en 16 bits)
-    mov ax, cx               ; AX = r2
-    mov bx, 10000
-    mul bx                   ; DX:AX = r2*10000  (DX=0)
-    add ax, si               ; AX = r2*10000 + r1
-    mov cx, ax               ; CX = resto
-
-    ; Restaura q2 en DX:AX
-    pop ax
-    pop dx
-
-    pop si
-    pop bx
-    ret
-DivBy100000 ENDP
-
-
-    
-    
-     
+      
 
 
 ; ------- Buscar estudiante por idx -------
