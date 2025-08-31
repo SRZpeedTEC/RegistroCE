@@ -640,23 +640,43 @@ MostrarEstudiantes ENDP
 
 
 ; ------- Mostrar estadisticas -------
-Opcion2:  
+Opcion2:
+    call SumNotas32          ; DX:AX = suma (escala x100000)
 
-    
-    call SumNotas32  ; Obtenemos la suma de todas las notas
-        
-    xor cx, cx ; Preparamos el divisor
-    
-    mov cl, contador_Estud ; Divisor en cx
-    
+    xor cx, cx
+    mov cl, contador_Estud   ; divisor
+    jcxz _NoHayEstudiantes
+
+    ; dividir suma / n  -> DX:AX = promedio (escala x100000)
     call DWordDivU16
-    
-    mov promedio_lo, ax ; Guardamos la parte alta y baja del promedio
-    mov promedio_hi, dx    
-    
+
+    ; guardar promedio mientras imprimes el texto
+    push dx
+    push ax
+
+    ; --- imprimir "Promedio: " ---
     mov dx, OFFSET msg_Stats_Promedio
     mov ah, 09h
     int 21h
+
+    ; recuperar promedio y ahora sí formatear
+    pop ax
+    pop dx
+    call PrintFixed5_DXAX
+
+    ; salto de línea
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+
+    ; (si luego necesitas guardarlo)
+    mov promedio_lo, ax
+    mov promedio_hi, dx
+
+    ; el resto de mensajes:
     mov dx, OFFSET msg_Stats_Aprob
     mov ah, 09h
     int 21h
@@ -670,7 +690,23 @@ Opcion2:
     mov ah, 09h
     int 21h
 
-    jmp Menu_Principal 
+    jmp Menu_Principal
+
+_NoHayEstudiantes:
+    ; si no hay datos, imprime 0.00000
+    mov dx, OFFSET msg_Stats_Promedio
+    mov ah, 09h
+    int 21h
+    xor dx, dx
+    xor ax, ax
+    call PrintFixed5_DXAX
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+    jmp Menu_Principal
     
     
     
@@ -769,6 +805,197 @@ DWordDivU16 PROC NEAR
     ret
     
 DWordDivU16 ENDP
+
+;IN : DX:AX = valor (escala x100000)
+;      CX    = divisor (16-bit)
+; OUT: DX:AX = cociente (32-bit)
+;      CX    = resto (0..divisor-1)
+DWordDivU16Rem PROC NEAR
+    push bx
+    push bp
+
+    mov bp, cx       ; divisor
+    mov bx, ax       ; low original
+
+    ; dividir parte alta
+    mov ax, dx
+    xor dx, dx
+    div bp           ; AX = q_hi, DX = r1
+    push ax          ; guardar q_hi
+    mov ax, bx       ; low original
+    div bp           ; AX = q_lo, DX = resto
+    mov cx, dx       ; CX = resto
+
+    pop dx           ; DX = q_hi
+    ; AX = q_lo
+
+    pop bp
+    pop bx
+    ret
+DWordDivU16Rem ENDP 
+
+; IN : AX = valor (0..65535)
+; USA: BX,CX,DX,SI  (digits_buf de 12 bytes)
+PrintU16_AX PROC NEAR
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov si, OFFSET digits_buf
+    add si, 12         ; apuntar al final del buffer
+    mov byte ptr [si-1], 0  ; terminador opcional
+
+    xor cx, cx         ; contador de dígitos
+    cmp ax, 0
+    jne pu16_loop
+    ; caso AX=0
+    mov dl, '0'
+    mov ah, 02h
+    int 21h
+    jmp pu16_done
+
+pu16_loop:
+    xor dx, dx
+    mov bx, 10
+    div bx             ; AX = AX/10, DX = AX%10
+    add dl, '0'        ; dígito ASCII
+    dec si
+    mov [si], dl
+    inc cx
+    cmp ax, 0
+    jne pu16_loop
+
+    ; imprimir desde [si] cx bytes
+pu16_print:
+    jcxz pu16_done
+    mov dl, [si]
+    mov ah, 02h
+    int 21h
+    inc si
+    dec cx
+    jmp pu16_print
+
+pu16_done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+PrintU16_AX ENDP
+
+; IN : DX:AX = valor en escala x100000
+; OUT: imprime EEE.ddddd
+; REQ: DWordDivU16Rem y PrintU16_AX
+PrintFixed5_DXAX PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; ---- 1) q1 = N/10000 ; r1 = N%10000 ----
+    mov cx, 10000
+    call DWordDivU16Rem       ; DX:AX = q1,  CX = r1
+    mov si, cx                ; SI = r1 (0..9999)
+
+    ; ---- 2) q2 = q1/10 ; r2 = q1%10 ----
+    mov cx, 10
+    call DWordDivU16Rem       ; DX:AX = q2,  CX = r2
+    mov bx, cx                ; BX = r2 (0..9)
+
+    ; ---- 3) Imprimir parte entera (q2) ----
+    ; q2 está en DX:AX; para 0..100 basta AX
+    push dx                   ; por prolijidad
+    call PrintU16_AX
+    pop  dx
+
+    ; punto
+    mov dl, '.'
+    mov ah, 02h
+    int 21h
+
+    ; ---- 4) Reconstruir RESTO32 = r2*10000 + r1 en DX:AX ----
+    mov ax, bx                ; AX = r2
+    mov di, 10000
+    mul di                    ; DX:AX = r2*10000   (0..90000)
+    add ax, si                ; + r1
+    adc dx, 0                 ; DX:AX = resto32 (0..99999)
+
+    ; ----- 5) Sacar 5 dígitos del RESTO32 (dividiendo entre 10) -----
+    mov bx, OFFSET digits_buf   ; base del buffer
+    mov di, 4                   ; escribimos de derecha a izquierda (pos 4..0)
+    mov bp, 5                   ; contador de 5 dígitos
+pf5_loop:
+    mov cx, 10
+    call DWordDivU16Rem         ; (DX:AX)/10 -> cociente en DX:AX, resto en CX (0..9)
+    add cl, '0'
+    mov [bx+di], cl             ; [BX+DI] sí es válido
+    dec di
+    dec bp
+    jnz pf5_loop
+
+    ; imprimir los 5 bytes
+    mov cx, 5
+    mov di, 0
+pf5_out:
+    mov dl, [bx+di]             ; [BX+DI] válido
+    mov ah, 02h
+    int 21h
+    inc di
+    loop pf5_out
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+PrintFixed5_DXAX ENDP
+
+
+; IN : DX:AX = valor (escala x100000)
+; OUT: DX:AX = cociente (entero)
+;      CX    = resto (0..99999)
+; IN : DX:AX = valor (escala x100000)
+; OUT: DX:AX = cociente (entero)
+;      CX    = resto (0..99999)
+DivBy100000 PROC NEAR
+    push bx
+    push si
+
+    ; 1) /10000  -> q1 y r1
+    mov cx, 10000
+    call DWordDivU16Rem      ; DX:AX = q1,  CX = r1
+    mov si, cx               ; SI = r1 (0..9999)
+
+    ; 2) q1 / 10 -> q2 y r2
+    mov cx, 10
+    call DWordDivU16Rem      ; DX:AX = q2,  CX = r2
+
+    ; Guarda q2 (cociente final)
+    push dx                  ; q2_hi
+    push ax                  ; q2_lo
+
+    ; resto = r2*10000 + r1
+    ; (r2 <= 9, cabe en 16 bits)
+    mov ax, cx               ; AX = r2
+    mov bx, 10000
+    mul bx                   ; DX:AX = r2*10000  (DX=0)
+    add ax, si               ; AX = r2*10000 + r1
+    mov cx, ax               ; CX = resto
+
+    ; Restaura q2 en DX:AX
+    pop ax
+    pop dx
+
+    pop si
+    pop bx
+    ret
+DivBy100000 ENDP
+
 
     
     
