@@ -70,8 +70,19 @@ notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)
 
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
 
+
+; ----------------- VARIABLES PARA ESTADISTICAS
+
 notas_val_lo DW NUM_MAX_ESTU DUP(0) ; Arreglo para guardar los numeros flotantes en formato entero 
-notas_val_hi DW NUM_MAX_ESTU DUP(0)
+notas_val_hi DW NUM_MAX_ESTU DUP(0)   
+
+sum_notas_lo DW 0 
+sum_notas_hi DW 0
+
+promedio_lo DW 0
+promedio_hi DW 0 
+
+digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir 
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
@@ -629,7 +640,20 @@ MostrarEstudiantes ENDP
 
 
 ; ------- Mostrar estadisticas -------
-Opcion2:
+Opcion2:  
+
+    
+    call SumNotas32  ; Obtenemos la suma de todas las notas
+        
+    xor cx, cx ; Preparamos el divisor
+    
+    mov cl, contador_Estud ; Divisor en cx
+    
+    call DWordDivU16
+    
+    mov promedio_lo, ax ; Guardamos la parte alta y baja del promedio
+    mov promedio_hi, dx    
+    
     mov dx, OFFSET msg_Stats_Promedio
     mov ah, 09h
     int 21h
@@ -646,7 +670,109 @@ Opcion2:
     mov ah, 09h
     int 21h
 
-    jmp Menu_Principal
+    jmp Menu_Principal 
+    
+    
+    
+    
+; -------------------- FUNCIONES ESTADISTICAS ------------------------------
+
+SumNotas32 PROC NEAR  
+    
+    push bx
+    push cx
+    push si
+    push di  
+    
+    ; acumulador = 0
+    
+    xor ax, ax ; Limpiamos AX:DX
+    xor dx, dx
+    mov sum_notas_lo, ax  
+    mov sum_notas_hi, dx    
+    
+    ; CX = Cantidad de estudiantes
+    
+    xor cx, cx
+    mov cl, contador_Estud 
+    jcxz SumNotasDone
+    
+    mov si, OFFSET notas_val_lo
+    mov di, OFFSET notas_val_hi
+                 
+SumNotas_Loop:  
+
+    ; Se carga el acumulador actual   
+    mov ax, sum_notas_lo
+    mov dx, sum_notas_hi
+    
+    ; AX:DX += valor[idx]
+    
+    add ax, [si]
+    adc dx, [di]
+    
+    mov sum_notas_lo, ax
+    mov sum_notas_hi, dx
+    
+    add si, 2
+    add di, 2
+    loop SumNotas_Loop 
+    
+    
+SumNotasDone:
+    ; Retorna en DX:AX  
+    mov ax, sum_notas_lo
+    mov dx, sum_notas_hi
+
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret    
+    
+SumNotas32 ENDP 
+
+
+DWordDivU16 PROC NEAR
+    
+    push bx
+    push bp  
+    
+    mov bp, cx   ; divisor
+    mov bx, ax   ; guardamos low original en bx
+    
+    
+    ; Dividimos primero parte alta
+    
+    mov ax, dx
+    xor dx, dx
+    div bp     ; AX = q_hi, DX = r1
+    mov cx, ax ; CX = q_hi
+    
+    ; Combinamos el resto con la parte baja original
+    
+    mov ax, bx ; devolvemos el low original a AX
+    div bp ; AX = q_lo, DX = Resto
+    
+    
+    ; Cociente completo
+    
+    mov dx, cx ; DX = q_hi 
+    
+    ; AX = q_lo, DX = q_hi
+    ; resto queda en DX del DIV, lo guardamos en CX
+    
+    mov cx, dx
+    
+    pop bp
+    pop bx
+    ret
+    
+DWordDivU16 ENDP
+
+    
+    
+     
 
 
 ; ------- Buscar estudiante por idx -------
