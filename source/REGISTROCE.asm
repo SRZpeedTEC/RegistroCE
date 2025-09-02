@@ -10,6 +10,10 @@ NOMBRE_LEN EQU 30; tamano maximo de char del nombre
 NOTA_LEN EQU 9; tamano de char de la nota
 tmpNota DB NOTA_LEN DUP(0)
 
+;temporales para hacer swap en el bubblesort
+tmpNombre DB NOMBRE_LEN DUP(0)
+tmpNotaTxt DB NOTA_LEN DUP(0)
+
 ;--- MSG DE MENU DE SISTEMA ---
 msg_Titulo DB 13, 10, '--- Bienvenido a RegistroCE ---', 13, 10, '$' ; (CR->13) = volver a la linea, (LF->10) = saltar linea
 
@@ -24,7 +28,8 @@ msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5): $'
 
 ;mensajes de error
 msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-5', 13, 10, '$'
-msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. No existe un estudiante con ese indice', 13, 10, '$'
+msg_Error_Indice DB 13, 10, 'Se ha ingresado un valor fuera del rango. No existe un estudiante con ese indice', 13, 10, '$'
+
 
 ;mensajes de ingresar estudiante
 msg_In_Nombre_Estud DB 13, 10, 'Ingrese el nombre del estudiante o ingrese 0 para salir al menu:', 13, 10, '$'
@@ -48,7 +53,11 @@ msg_Stats_Desaprob_Porc DB 13, 10, 'Porcentaje desaprobacion:', '$'
 msg_Buscar_Idx DB 13, 10, 'Ingrese el valor de la posicion del estudiante que desea consultar:', 13, 10, '$'
 
 ;mensajes de ordenar calificaciones
-msg_Ordenar_Asc_Desc DB 13, 10, 'Ingrese (1) si quiere ordenar ascendente o (2) descendente', 13, 10, '$'
+msg_Ordenar_Asc_Desc DB 13, 10, 'Ingrese (1) si quiere ordenar ascendente o (2) descendente', 13, 10, '$'  
+
+
+; --- mensaje minimo ordenamiento ---
+msg_No_Suf_Orden DB 13,10,'No hay suficientes estudiantes para ordenar (se requieren al menos 2).',13,10,'$'
 
 ;mensajes de salir programa
 msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'
@@ -107,7 +116,15 @@ digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
-buf_Opcion   DB 2,0, 2 DUP(0)
+buf_Opcion   DB 2,0, 2 DUP(0)  
+
+
+; buffer para leer opcion de ordenamiento
+buf_Orden DB 2,0, 2 DUP(0)
+
+; 0 = ascendente, 1 = descendente
+orden_modo DB 0
+
 
 
 .CODE
@@ -1138,7 +1155,7 @@ O3_TieneValor:
 O3_Invalido: 
 
     ; Mandamos el mensaje de error
-    mov  dx, OFFSET msg_Error_Menu
+    mov  dx, OFFSET msg_Error_Indice
     mov  ah, 09h
     int  21h
     jmp  O3_Leer
@@ -1229,10 +1246,359 @@ PrintStudentAtIndex ENDP
 
 ; ------- Ordenar calificaciones -------
 Opcion4:
+    mov al, contador_Estud
+    cmp al, 2
+    jb O4_NoSuficientes
+
+O4_PreguntarModo:
     mov dx, OFFSET msg_Ordenar_Asc_Desc
     mov ah, 09h
     int 21h
+    
+    mov ah, 0Ch
+    mov al, 0Ah
+    mov dx, OFFSET buf_Orden
+    int 21h   
+    
+    mov al, [buf_Orden+1]
+    cmp al, 1
+    jb O4_PreguntarModo
+    
+    mov bl, [buf_Orden+2]
+    
+    cmp bl, '1' 
+    je O4_Asc
+    cmp bl, '2'
+    je O4_Desc
+    jmp O4_PreguntarModo
+
+O4_Asc: 
+    mov byte ptr orden_modo, 0 
+    mov dl, '1'
+    mov ah, 02h
+    int 21h
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h  
+    ; ordenar
+    call BubbleSort
+    ;mostrar resultado
+    call MostrarEstudiantes
+    jmp Menu_Principal  
+
+O4_Desc: 
+    mov byte ptr orden_modo, 1
+    mov dl, '2'
+    mov ah, 02h
+    int 21h
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+    ; ordenar
+    call BubbleSort
+    ; mostrar resultado
+    call MostrarEstudiantes
+    jmp Menu_Principal  
+    
+O4_NoSuficientes:
+    mov dx, OFFSET msg_No_Suf_Orden
+    mov ah, 09h
+    int 21h
     jmp Menu_Principal
+    
+    
+; ------------------------------------------------------------
+; SwapAdj: Intercambia i y j en cada regsitro por estudiante (parte del bubble)
+; ------------------------------------------------------------         
+
+SwapNext PROC NEAR
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    cld
+
+    ; Guardar i en BP (16 bits)
+    xor  ah, ah
+    mov  bp, ax                 ; BP = i
+
+    ; --- Validación: i < contador_Estud-1 ---
+    mov  bl, contador_Estud
+    cmp  bl, 2
+    jb   SN_Done                ; <2 estudiantes
+
+    dec  bl                     ; last = n-1
+    mov  ax, bp                 ; AX = i
+    cmp  al, bl
+    jae  SN_Done
+
+    ; ES = DS (por si en otra parte se cambió)
+    mov  ax, ds
+    mov  es, ax
+
+    ; 1) NOMBRE (30 bytes) 
+ 
+    mov  ax, bp
+    mov  bx, ax
+    shl  bx, 5                   ; bx = i*32
+    shl  ax, 1                   ; ax = i*2
+    sub  bx, ax                  ; bx = i*30
+
+    mov  si, OFFSET nombres_Estud
+    add  si, bx                  ; SI = base_i
+    mov  di, si
+    add  di, NOMBRE_LEN          ; DI = base_j
+
+    mov  cx, NOMBRE_LEN          ; 30
+SN_SwapNombreLoop:
+    lodsb                        ; AL = [SI], SI++
+    xchg al, [di]                ; AL <-> [DI]
+    mov  [si-1], al              ; escribir en [SI-1] el byte de j
+    inc  di
+    loop SN_SwapNombreLoop
+
+    
+    ; 2) NOMBRE_LEN_ARR (1 byte)
+    ;    len[i] <-> len[i+1]
+    
+    mov  ax, bp
+    mov  di, OFFSET NOMBRE_LEN_ARR
+    add  di, ax
+    mov  dl, [di]
+    xchg dl, BYTE PTR [di+1]
+    mov  [di], dl
+
+    
+    ; 3) NOTAS (9 bytes) 
+    
+    mov  ax, bp
+    mov  bx, ax
+    shl  bx, 3                   ; bx = i*8
+    add  bx, ax                  ; bx = i*9
+
+    mov  si, OFFSET notas
+    add  si, bx                  ; SI = base_i
+    mov  di, si
+    add  di, NOTA_LEN            ; DI = base_j
+
+    mov  cx, NOTA_LEN            ; 9
+SN_SwapNotaLoop:
+    lodsb
+    xchg al, [di]
+    mov  [si-1], al
+    inc  di
+    loop SN_SwapNotaLoop
+
+    
+    ; 4) NOTAS_LEN_ARR (1 byte)
+    
+    mov  ax, bp
+    mov  di, OFFSET NOTAS_LEN_ARR
+    add  di, ax
+    mov  dl, [di]
+    xchg dl, BYTE PTR [di+1]
+    mov  [di], dl
+
+    
+    ; 5) notas_val_lo (word)  ;
+    
+    mov  ax, bp
+    shl  ax, 1                   ; i*2
+    mov  di, OFFSET notas_val_lo
+    add  di, ax                  ; &lo[i]
+    mov  dx, [di]
+    xchg dx, WORD PTR [di+2]     ; lo[i] <-> lo[i+1]
+    mov  [di], dx
+
+    
+    ; 6) notas_val_hi (word)
+    
+    mov  ax, bp
+    shl  ax, 1
+    mov  di, OFFSET notas_val_hi
+    add  di, ax                  ; &hi[i]
+    mov  dx, [di]
+    xchg dx, WORD PTR [di+2]     ; hi[i] <-> hi[i+1]
+    mov  [di], dx
+
+SN_Done:
+    pop  bp
+    pop  es
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    popf
+    ret
+SwapNext ENDP
+
+    
+
+; ------------------------------------------------------------
+; CmpNotaIdxVsNext: compara nota[i] con nota[i+1] (32-bit)
+; ------------------------------------------------------------
+CmpNotaIdxVsNext PROC NEAR
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; ---- offset = i*2 ----
+    xor  ah, ah          ; AH=0 para que AX=i
+    mov  si, ax          ; SI = i
+    shl  si, 1           ; SI = i*2
+
+    ;cargar v1 = DX:AX = nota[i]
+    mov  di, OFFSET notas_val_lo
+    add  di, si
+    mov  ax, [di]        ; AX = LO[i]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, si
+    mov  dx, [di]        
+
+    
+    mov  bp, si
+    add  bp, 2           ; (i+1)*2
+    mov  di, OFFSET notas_val_lo
+    add  di, bp
+    mov  bx, [di]        ; BX = LO[i+1]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, bp
+    mov  cx, [di]        ; CX = HI[i+1] -> v2 = CX:BX
+
+   
+    sub  ax, bx
+    sbb  dx, cx
+
+    jc   CNI_Less        
+
+    
+    or   dx, ax
+    jz   CNI_Equal        
+
+    ; Mayor
+    mov  al, 2
+    jmp  CNI_Done
+
+CNI_Less:
+    mov  al, 0
+    jmp  CNI_Done
+
+CNI_Equal:
+    mov  al, 1
+
+CNI_Done:
+    xor  ah, ah          
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    ret
+CmpNotaIdxVsNext ENDP
+
+; ------------------------------------------------------------
+; BubbleSort: ordena segun orden_modo (0=asc, 1=desc)
+; ------------------------------------------------------------
+BubbleSort PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; n = contador_Estud
+    xor ax, ax
+    mov al, contador_Estud
+    cmp al, 2
+    jb  BS_Done
+
+    mov bl, al         ; BL = n
+    dec bl             ; last = n-1
+
+BS_Outer:
+    xor bh, bh         ; swapped = 0
+    xor cx, cx         ; CL = i = 0
+
+BS_Inner:
+    ; while (i < last)
+    mov al, bl         ; AL = last
+    cmp cl, al
+    jae BS_AfterInner
+
+    ; comp = cmp(nota[i], nota[i+1])
+    mov al, cl         ; AL = i
+    call CmpNotaIdxVsNext   ; AL = 0(<),1(=),2(>)
+    mov dl, al              ; DL = comp
+
+    ; decidir swap segun orden_modo
+    mov al, orden_modo
+    cmp al, 0
+    jne BS_Desc
+
+    ; ascendente: swap si comp==2
+    cmp dl, 2
+    jne BS_NoSwap
+    mov al, cl              ; AL = i
+    call SwapNext
+    mov bh, 1 
+    ;mov dl, '*'          ; DEBUG: marca que hubo swap
+    ;mov ah, 02h
+    ;int 21h
+    jmp BS_NoSwap
+
+BS_Desc:
+    ; descendente: swap si comp==0
+    cmp dl, 0
+    jne BS_NoSwap
+    mov al, cl
+    call SwapNext
+    mov bh, 1
+    ;mov dl, '*'          ; DEBUG: marca que hubo swap
+    ;mov ah, 02h
+    ;int 21h
+
+BS_NoSwap:
+    inc cl
+    jmp BS_Inner
+
+BS_AfterInner:
+    cmp bh, 0               ; early-exit si no hubo swaps
+    je  BS_Done
+
+    dec bl                  ;
+    cmp bl, 0
+    ja  BS_Outer
+
+BS_Done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+BubbleSort ENDP
+
+
 
 
 ; ------- Terminar programa -------
