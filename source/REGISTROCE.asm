@@ -1,3 +1,4 @@
+ 
 ; Implementacion de RegistroCE.ASM
 .MODEL SMALL
 .STACK 256
@@ -8,7 +9,12 @@
 NUM_MAX_ESTU EQU 15 ; se definen 15 alumnos como maximo
 NOMBRE_LEN EQU 30; tamano maximo de char del nombre
 NOTA_LEN EQU 9; tamano de char de la nota
-tmpNota DB NOTA_LEN DUP(0)
+tmpNota DB NOTA_LEN DUP(0)  
+
+
+;temporales para hacer swap en el bubblesort
+tmpNombre DB NOMBRE_LEN DUP(0)
+tmpNotaTxt DB NOTA_LEN DUP(0)
 
 ;--- MSG DE MENU DE SISTEMA ---
 msg_Titulo DB 13, 10, '--- Bienvenido a RegistroCE ---', 13, 10, '$' ; (CR->13) = volver a la linea, (LF->10) = saltar linea
@@ -706,13 +712,16 @@ O4_Asc:
     int 21h
     mov dl, 10
     mov ah, 02h
-    int 21h
-    ;aqui va el bubble
+    int 21h  
+    ; ordenar
+    call BubbleSort
+    ;mostrar resultado
+    call MostrarEstudiantes
     jmp Menu_Principal  
 
 O4_Desc: 
     mov byte ptr orden_modo, 1
-    mov dl, '1'
+    mov dl, '2'
     mov ah, 02h
     int 21h
     mov dl, 13
@@ -721,7 +730,10 @@ O4_Desc:
     mov dl, 10
     mov ah, 02h
     int 21h
-    ;aqui va el bubble
+    ; ordenar
+    call BubbleSort
+    ; mostrar resultado
+    call MostrarEstudiantes
     jmp Menu_Principal  
     
 O4_NoSuficientes:
@@ -731,7 +743,333 @@ O4_NoSuficientes:
     jmp Menu_Principal
     
     
+; ------------------------------------------------------------
+; SwapAdj: Intercambia i y j en cada regsitro por estudiante (parte del bubble)
+; ------------------------------------------------------------         
 
+SwapNext PROC NEAR
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push bp
+
+    cld
+
+    ; Guardar i en BP (16 bits) para no pisarlo
+    ; AX aun contiene AL = i después del push ax
+    mov  bp, ax                ; BP = i (AH=0)
+
+    ; --- Validación: i < contador_Estud-1 ---
+    mov  bl, contador_Estud
+    cmp  bl, 2
+    jb   SN_Done               ; <2 estudiantes
+
+    dec  bl                    ; bl = last = n-1
+    mov  ax, bp                ; AL = i
+    cmp  al, bl
+    jae  SN_Done               ; i >= last -> nada que hacer
+
+    ; ES = DS para rep movsb
+    mov  ax, ds
+    mov  es, ax
+
+    ; ========================================================
+    ; 1) NOMBRE (30 bytes)
+    ; ========================================================
+    ; DI = base_i = &nombres_Estud[i * 30]
+    mov  ax, bp                ; AL = i
+    mov  cl, NOMBRE_LEN        ; CL = 30
+    mul  cl                    ; AX = i * 30
+    mov  di, OFFSET nombres_Estud
+    add  di, ax                ; DI = base_i
+
+    ; SI = base_j = base_i + 30
+    mov  si, di
+    add  si, NOMBRE_LEN
+
+    ; tmpNombre <- nombre[i]
+    push si                    ; guardar base_j
+    push di                    ; guardar base_i
+    mov  si, di                ; SI = base_i
+    mov  di, OFFSET tmpNombre
+    mov  cx, NOMBRE_LEN
+    rep  movsb
+
+    ; nombre[i] <- nombre[j]
+    pop  di                    ; DI = base_i
+    pop  si                    ; SI = base_j
+    mov  cx, NOMBRE_LEN
+    rep  movsb
+
+    ; nombre[j] <- tmpNombre  (sin recalcular con i)
+    ; tras el rep anterior: SI=base_j+len, DI=base_i+len
+    sub  si, NOMBRE_LEN        ; SI = base_j
+    mov  di, si                ; DI = base_j
+    mov  si, OFFSET tmpNombre
+    mov  cx, NOMBRE_LEN
+    rep  movsb
+
+    ; ========================================================
+    ; 2) NOMBRE_LEN_ARR (1 byte)
+    ; ========================================================
+    mov  ax, bp                ; AX = i
+    mov  di, OFFSET NOMBRE_LEN_ARR
+    add  di, ax                ; DI = &len[i]
+    mov  dl, [di]
+    xchg dl, BYTE PTR [di+1]   ; len[i] <-> len[i+1]
+    mov  [di], dl
+
+    ; ========================================================
+    ; 3) NOTAS (9 bytes)
+    ; ========================================================
+    ; DI = base_i = &notas[i * 9]
+    mov  ax, bp                ; AL = i
+    mov  cl, NOTA_LEN          ; CL = 9
+    mul  cl                    ; AX = i * 9
+    mov  di, OFFSET notas
+    add  di, ax                ; DI = base_i
+
+    ; SI = base_j = base_i + 9
+    mov  si, di
+    add  si, NOTA_LEN
+
+    ; tmpNotaTxt <- notas[i]
+    push si
+    push di
+    mov  si, di                ; SI = base_i
+    mov  di, OFFSET tmpNotaTxt
+    mov  cx, NOTA_LEN
+    rep  movsb
+
+    ; notas[i] <- notas[j]
+    pop  di                    ; DI = base_i
+    pop  si                    ; SI = base_j
+    mov  cx, NOTA_LEN
+    rep  movsb
+
+    ; notas[j] <- tmpNotaTxt (sin recalcular con i)
+    sub  si, NOTA_LEN          ; SI = base_j
+    mov  di, si                ; DI = base_j
+    mov  si, OFFSET tmpNotaTxt
+    mov  cx, NOTA_LEN
+    rep  movsb
+
+    ; ========================================================
+    ; 4) NOTAS_LEN_ARR (1 byte)
+    ; ========================================================
+    mov  ax, bp
+    mov  di, OFFSET NOTAS_LEN_ARR
+    add  di, ax
+    mov  dl, [di]
+    xchg dl, BYTE PTR [di+1]
+    mov  [di], dl
+
+    ; ========================================================
+    ; 5) notas_val_lo (word)
+    ; ========================================================
+    mov  ax, bp
+    shl  ax, 1                 ; i * 2
+    mov  di, OFFSET notas_val_lo
+    add  di, ax                ; DI = &lo[i]
+    mov  dx, [di]              ; DX = lo[i]
+    xchg dx, WORD PTR [di+2]   ; lo[i] <-> lo[i+1]
+    mov  [di], dx
+
+    ; ========================================================
+    ; 6) notas_val_hi (word)
+    ; ========================================================
+    mov  ax, bp
+    shl  ax, 1                 ; i * 2
+    mov  di, OFFSET notas_val_hi
+    add  di, ax                ; DI = &hi[i]
+    mov  dx, [di]              ; DX = hi[i]
+    xchg dx, WORD PTR [di+2]   ; hi[i] <-> hi[i+1]
+    mov  [di], dx
+
+SN_Done:
+    pop  bp
+    pop  es
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    popf
+    ret
+SwapNext ENDP
+
+    
+
+; ------------------------------------------------------------
+; CmpNotaIdxVsNext: compara nota[i] con nota[i+1] (32-bit)
+; ------------------------------------------------------------
+CmpNotaIdxVsNext PROC NEAR
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; ---- offset = i*2 ----
+    xor  ah, ah          ; AH=0 para que AX=i
+    mov  si, ax          ; SI = i
+    shl  si, 1           ; SI = i*2
+
+    ; ---- cargar v1 = DX:AX = nota[i] ----
+    mov  di, OFFSET notas_val_lo
+    add  di, si
+    mov  ax, [di]        ; AX = LO[i]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, si
+    mov  dx, [di]        ; DX = HI[i]  -> v1 = DX:AX
+
+    ; ---- cargar v2 = CX:BX = nota[i+1] ----
+    mov  bp, si
+    add  bp, 2           ; (i+1)*2
+    mov  di, OFFSET notas_val_lo
+    add  di, bp
+    mov  bx, [di]        ; BX = LO[i+1]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, bp
+    mov  cx, [di]        ; CX = HI[i+1] -> v2 = CX:BX
+
+    ; ---- comparar v1 ? v2 mediante resta de 32 bits: v1 - v2 ----
+    ; Tras estas dos instrucciones:
+    ;  - CF=1 -> hubo borrow -> v1 < v2
+    ;  - CF=0 y resultado==0 -> v1 == v2
+    ;  - CF=0 y resultado>0  -> v1 > v2
+    sub  ax, bx
+    sbb  dx, cx
+
+    jc   CNI_Less         ; borrow -> v1 < v2
+
+    ; Sin borrow: ¿igual o mayor?
+    or   dx, ax
+    jz   CNI_Equal        ; resultado 0 -> iguales
+
+    ; Mayor
+    mov  al, 2
+    jmp  CNI_Done
+
+CNI_Less:
+    mov  al, 0
+    jmp  CNI_Done
+
+CNI_Equal:
+    mov  al, 1
+
+CNI_Done:
+    xor  ah, ah           ; prolijidad: AH=0
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    ret
+CmpNotaIdxVsNext ENDP
+
+; ------------------------------------------------------------
+; BubbleSort: ordena segun orden_modo (0=asc, 1=desc)
+; ------------------------------------------------------------
+BubbleSort PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    ; n = contador_Estud
+    xor ax, ax
+    mov al, contador_Estud
+    cmp al, 2
+    jb  BS_Done
+
+    mov bl, al         ; BL = n
+    dec bl             ; last = n-1
+
+BS_Outer:
+    xor bh, bh         ; swapped = 0
+    xor cx, cx         ; CL = i = 0
+
+BS_Inner:
+    ; while (i < last)
+    mov al, bl         ; AL = last
+    cmp cl, al
+    jae BS_AfterInner
+
+    ; comp = cmp(nota[i], nota[i+1])
+    mov al, cl         ; AL = i
+    call CmpNotaIdxVsNext   ; AL = 0(<),1(=),2(>)
+    mov dl, al              ; DL = comp
+
+    ; decidir swap segun orden_modo
+    mov al, orden_modo
+    cmp al, 0
+    jne BS_Desc
+
+    ; ascendente: swap si comp==2
+    cmp dl, 2
+    jne BS_NoSwap
+    mov al, cl              ; AL = i
+    call SwapNext
+    mov bh, 1 
+    ;mov dl, '*'          ; DEBUG: marca que hubo swap
+    ;mov ah, 02h
+    ;int 21h
+    jmp BS_NoSwap
+
+BS_Desc:
+    ; descendente: swap si comp==0
+    cmp dl, 0
+    jne BS_NoSwap
+    mov al, cl
+    call SwapNext
+    mov bh, 1
+    ;mov dl, '*'          ; DEBUG: marca que hubo swap
+    ;mov ah, 02h
+    ;int 21h
+
+BS_NoSwap:
+    inc cl
+    jmp BS_Inner
+
+BS_AfterInner:
+    cmp bh, 0               ; early-exit si no hubo swaps
+    je  BS_Done
+
+    dec bl                  ; last--
+    cmp bl, 0
+    ja  BS_Outer
+
+BS_Done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+BubbleSort ENDP
+
+
+
+    
+    
+    
+    
+    
+    
+    
+    
 
 
 ; ------- Terminar programa -------
