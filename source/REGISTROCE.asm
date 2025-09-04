@@ -329,7 +329,7 @@ O1_PedirNota:
     add si, 3    
     mov al, [si]
     cmp al, '.'
-    je O1_Mala_Nota
+    je _MalF1
     jmp O1_Anadir_Punto_Ceros
 
 O1_Nota_Inf_100:
@@ -371,7 +371,7 @@ O1_CheckSiguiente:
 
     ; numero decimal '.'
     cmp al, '.'
-    jne O1_Mala_Nota
+    jne _MalF2
     mov byte ptr [di+bx], '.'
     inc bx
     inc si
@@ -384,11 +384,11 @@ O1_Copiar_Deci:
     cmp al, 13                 
     je  O1_Completar_Ceros
     cmp al, '0'
-    jb  O1_Mala_Nota
+    jb  _MalF1
     cmp al, '9'
-    ja  O1_Mala_Nota
+    ja  _MalF1
     cmp cx, 5
-    jae O1_Mala_Nota             ; >5 decimales => inválido
+    jae _MalF1             ; >5 decimales => inválido
     mov [di+bx], al
     inc bx
     inc si
@@ -681,6 +681,22 @@ MostrarEstudiantes ENDP
 
 
 ; ------- Mostrar estadisticas -------
+
+_NoHayEstudiantes:   ; caso base de lista vacia
+
+    ; si no hay estudiantes registrados, se imprime un mensaje de error
+    mov dx, OFFSET msg_NoEstudiantes
+    mov ah, 09h
+    int 21h
+    xor dx, dx
+    xor ax, ax
+    
+    
+    pop cx
+    jmp Menu_Principal
+
+
+
 Opcion2:   
     push cx
     xor cx, cx
@@ -768,19 +784,6 @@ Opcion2:
     int 21h 
     
 
-    pop cx
-    jmp Menu_Principal
-
-_NoHayEstudiantes:   
-
-    ; si no hay estudiantes registrados, se imprime un mensaje de error
-    mov dx, OFFSET msg_NoEstudiantes
-    mov ah, 09h
-    int 21h
-    xor dx, dx
-    xor ax, ax
-    
-    
     pop cx
     jmp Menu_Principal
     
@@ -1342,45 +1345,47 @@ SwapNext PROC NEAR
     xor  ah, ah
     mov  bp, ax                 ; BP = i
 
-    ; --- Validaci�n: i < contador_Estud-1 ---
+    ; --- Validación: i < contador_Estud-1 ---
     mov  bl, contador_Estud
     cmp  bl, 2
-    jb   SN_Done                ; <2 estudiantes
+    jb   short SN_EarlyExit     ; <2 estudiantes -> salir cerca
 
     dec  bl                     ; last = n-1
     mov  ax, bp                 ; AX = i
     cmp  al, bl
-    jae  SN_Done
+    jae  short SN_EarlyExit     ; i >= last -> salir cerca
 
-    ; ES = DS (por si en otra parte se cambi�)
+    jmp  short SN_AfterGuards   ; *** saltar el stub en flujo normal ***
+
+SN_EarlyExit:
+    jmp  SN_Done                ; salto near (al epílogo común)
+
+SN_AfterGuards:
+    ; ES = DS por si en otra parte se cambió
     mov  ax, ds
     mov  es, ax
 
-    ; 1) NOMBRE (30 bytes) 
- 
+    ; 1) NOMBRE (30 bytes): BX = i*30  (MUL para 8086)
     mov  ax, bp
+    mov  bx, 30
+    push dx
+    mul  bx                     ; DX:AX = i*30
     mov  bx, ax
-    shl  bx, 5                   ; bx = i*32
-    shl  ax, 1                   ; ax = i*2
-    sub  bx, ax                  ; bx = i*30
+    pop  dx
 
     mov  si, OFFSET nombres_Estud
-    add  si, bx                  ; SI = base_i
+    add  si, bx
     mov  di, si
-    add  di, NOMBRE_LEN          ; DI = base_j
-
-    mov  cx, NOMBRE_LEN          ; 30
+    add  di, NOMBRE_LEN
+    mov  cx, NOMBRE_LEN
 SN_SwapNombreLoop:
-    lodsb                        ; AL = [SI], SI++
-    xchg al, [di]                ; AL <-> [DI]
-    mov  [si-1], al              ; escribir en [SI-1] el byte de j
+    lodsb
+    xchg al, [di]
+    mov  [si-1], al
     inc  di
     loop SN_SwapNombreLoop
 
-    
     ; 2) NOMBRE_LEN_ARR (1 byte)
-    ;    len[i] <-> len[i+1]
-    
     mov  ax, bp
     mov  di, OFFSET NOMBRE_LEN_ARR
     add  di, ax
@@ -1388,20 +1393,19 @@ SN_SwapNombreLoop:
     xchg dl, BYTE PTR [di+1]
     mov  [di], dl
 
-    
-    ; 3) NOTAS (9 bytes) 
-    
+    ; 3) NOTAS (9 bytes): BX = i*9  (MUL para 8086)
     mov  ax, bp
+    mov  bx, 9
+    push dx
+    mul  bx                     ; DX:AX = i*9
     mov  bx, ax
-    shl  bx, 3                   ; bx = i*8
-    add  bx, ax                  ; bx = i*9
+    pop  dx
 
     mov  si, OFFSET notas
-    add  si, bx                  ; SI = base_i
+    add  si, bx
     mov  di, si
-    add  di, NOTA_LEN            ; DI = base_j
-
-    mov  cx, NOTA_LEN            ; 9
+    add  di, NOTA_LEN
+    mov  cx, NOTA_LEN
 SN_SwapNotaLoop:
     lodsb
     xchg al, [di]
@@ -1409,9 +1413,7 @@ SN_SwapNotaLoop:
     inc  di
     loop SN_SwapNotaLoop
 
-    
     ; 4) NOTAS_LEN_ARR (1 byte)
-    
     mov  ax, bp
     mov  di, OFFSET NOTAS_LEN_ARR
     add  di, ax
@@ -1419,26 +1421,22 @@ SN_SwapNotaLoop:
     xchg dl, BYTE PTR [di+1]
     mov  [di], dl
 
-    
-    ; 5) notas_val_lo (word)  ;
-    
+    ; 5) notas_val_lo (word)
     mov  ax, bp
-    shl  ax, 1                   ; i*2
+    shl  ax, 1                  ; i*2
     mov  di, OFFSET notas_val_lo
-    add  di, ax                  ; &lo[i]
+    add  di, ax
     mov  dx, [di]
-    xchg dx, WORD PTR [di+2]     ; lo[i] <-> lo[i+1]
+    xchg dx, WORD PTR [di+2]
     mov  [di], dx
 
-    
     ; 6) notas_val_hi (word)
-    
     mov  ax, bp
     shl  ax, 1
     mov  di, OFFSET notas_val_hi
-    add  di, ax                  ; &hi[i]
+    add  di, ax
     mov  dx, [di]
-    xchg dx, WORD PTR [di+2]     ; hi[i] <-> hi[i+1]
+    xchg dx, WORD PTR [di+2]
     mov  [di], dx
 
 SN_Done:
@@ -1453,6 +1451,7 @@ SN_Done:
     popf
     ret
 SwapNext ENDP
+
 
     
 
