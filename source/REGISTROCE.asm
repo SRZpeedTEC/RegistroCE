@@ -41,6 +41,7 @@ msg_Listado DB 13,10,'--- Estudiantes registrados ---',13,10,'$'
 
 
 ;mensajes de mostrar estadisticas
+msg_NoEstudiantes DB 13, 10, 'No hay estudiantes registrados', 13, 10,'$'
 msg_Stats_Promedio DB 13, 10, 'Promedio:', '$'
 msg_Stats_Nota_Max DB 13, 10, 'Nota Maxima:', '$'
 msg_Stats_Nota_Min DB 13, 10, 'Nota Minima:', '$'
@@ -188,17 +189,6 @@ Inputs:
 
     ; primer char se guarda en bl
     mov bl, [buf_Opcion+2]
-
-    ; muestra digito del usuario
-    mov dl, bl
-    mov ah, 02h
-    int 21h
-    mov dl, 13         
-    mov ah, 02h
-    int 21h
-    mov dl, 10         
-    mov ah, 02h
-    int 21h
 
 ; ------------------ Jumps condicionales cortos (solucion jumps out of range)------------------
     cmp bl, '1'
@@ -351,16 +341,25 @@ O1_Nota_Inf_100:
     ja  _MalF1
     mov [di], al
 
-    ; segundo dígito 
-    lodsb 
+    mov al, [si]            ; mirar SIN consumir
+    cmp al, '.'             
+    je  O1_ConUnDigito      ; ej: 9.xxx
+    cmp al, 13              
+    je  O1_ConUnDigito      ; ej: 9<Enter> → 9.00000
+
+    ; aquí esperamos segundo dígito (caso 10..99)
+    lodsb                   ; consumir 2º carácter
     cmp al, '0'
     jb  _MalF2
     cmp al, '9'
     ja  _MalF2
-    mov [di+1], al
+    mov [di+1], al          ; guarda 2º dígito
+    mov bx, 2               ; longitud parcial: 2
+    jmp O1_CheckSiguiente
 
-    mov bx, 2                  ; próxima posición en tmp
-    jmp O1_CheckSiguiente           
+O1_ConUnDigito:
+    mov bx, 1               ; longitud parcial: 1 (solo 1 dígito)
+    jmp O1_CheckSiguiente          
 
 _MalF1: jmp O1_Mala_Nota         
 _MalF2: jmp O1_Mala_Nota
@@ -503,14 +502,14 @@ PN5_NextChar:
     je  PN5_NextChar
 
     ; bl debe ser '0'..'9' 
-    sub bl, '0'         ; bl = d�gito (0..9)
+    sub bl, '0'         ; bl = d�gito (0..9)
     xor bh, bh
 
     ; val = val*10 + bl
     call DWordMul10 
        
     
-    add ax, bx          ; AX += d�gito
+    add ax, bx          ; AX += d�gito
     adc dx, 0           ; acarreo a DX si hay overflow de AX
 
     jmp short PN5_NextChar
@@ -682,7 +681,9 @@ MostrarEstudiantes ENDP
 
 
 ; ------- Mostrar estadisticas -------
-Opcion2:
+Opcion2:   
+    push cx
+    xor cx, cx
     call SumNotas32
     mov  cl, contador_Estud
     jcxz _NoHayEstudiantes
@@ -697,7 +698,7 @@ Opcion2:
     mov ah, 09h
     int 21h
 
-    ; recuperar promedio y ahora s� formatear
+    ; recuperar promedio y ahora sí formatear
     pop ax
     pop dx
     call PrintNumber_DXAX
@@ -764,26 +765,23 @@ Opcion2:
     int 21h
     mov dl, 10
     mov ah, 02h
-    int 21h
+    int 21h 
+    
 
-
+    pop cx
     jmp Menu_Principal
 
 _NoHayEstudiantes:   
 
-    ; si no hay datos, se imprime 0.00000
-    mov dx, OFFSET msg_Stats_Promedio
+    ; si no hay estudiantes registrados, se imprime un mensaje de error
+    mov dx, OFFSET msg_NoEstudiantes
     mov ah, 09h
     int 21h
     xor dx, dx
     xor ax, ax
-    call PrintNumber_DXAX
-    mov dl, 13
-    mov ah, 02h
-    int 21h
-    mov dl, 10
-    mov ah, 02h
-    int 21h
+    
+    
+    pop cx
     jmp Menu_Principal
     
     
@@ -847,33 +845,37 @@ SumNotasDone:
 SumNotas32 ENDP 
    
 
+; Si CX = 0, usa 1 para evitar #DE (divide error).
 Div32by16U PROC NEAR
     push bx
     push bp
-    mov  bp, cx ; divisor
-    mov  bx, ax ; guardar low original
 
-    ; dividimos parte alta
+    mov  bp, cx              ; 
+    or   bp, bp              ; divisor? 0
+    jnz  short D32_do        ; 
+    mov  bp, 1               ; si divisor=0 usar divisor=1
+
+D32_do:
+    mov  bx, ax              ; 
+
+    ; dividir la parte alta (DX) entre BP
     mov  ax, dx
     xor  dx, dx
-    div  bp ; AX = c_hi, DX = r1
-    mov  cx, ax ; CX = c_hi
+    div  bp                  ; AX = cociente alto, DX = DX
+    mov  cx, ax              ; CX = cociente alto
 
-    ; dividimos parte baja : residuo1 
-    mov  ax, bx ; AX = low original
-    ; DX ya es r1
-    div  bp ; AX = q_lo, DX = resto
+    ; dividir la parte baja usando DX
+    mov  ax, bx              ; recuperar parte baja
+    ; DX ya contiene DX
+    div  bp                  ; AX = cociente bajo, DX = residuo final
 
-    ; Armamos el numero apartir de cocientes c_hi:c_lo
-    xchg dx, cx ; DX = c_hi,  CX = resto
-    
-    ; AX ya es c_lo
+    ; armar el resultado: DX = cociente alto, AX = cociente bajo
+    xchg dx, cx              ; DX = c_hi, CX = resto
+
     pop  bp
     pop  bx
-    ret    
-    
+    ret
 Div32by16U ENDP
- 
  
  
    
@@ -1093,7 +1095,13 @@ Opcion3:
     ; si no hay estudiantes volvemos al menu
     mov  al, contador_Estud
     cmp  al, 0
-    je   Menu_Principal
+    jnz  O3_Leer           ; si hay estudiantes, sigue
+
+    ; si no hay estudiantes
+    mov  dx, OFFSET msg_NoEstudiantes
+    mov  ah, 09h
+    int  21h
+    jmp  Menu_Principal
 
 O3_Leer:
     mov  dx, OFFSET msg_Buscar_Idx
@@ -1334,7 +1342,7 @@ SwapNext PROC NEAR
     xor  ah, ah
     mov  bp, ax                 ; BP = i
 
-    ; --- Validaci�n: i < contador_Estud-1 ---
+    ; --- Validaci�n: i < contador_Estud-1 ---
     mov  bl, contador_Estud
     cmp  bl, 2
     jb   SN_Done                ; <2 estudiantes
@@ -1344,7 +1352,7 @@ SwapNext PROC NEAR
     cmp  al, bl
     jae  SN_Done
 
-    ; ES = DS (por si en otra parte se cambi�)
+    ; ES = DS (por si en otra parte se cambi�)
     mov  ax, ds
     mov  es, ax
 
