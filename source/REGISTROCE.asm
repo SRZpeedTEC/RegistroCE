@@ -117,7 +117,10 @@ digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
-buf_Opcion   DB 2,0, 2 DUP(0)  
+buf_Opcion   DB 2,0, 2 DUP(0)   
+
+; ---- Orden indirecto (IDs de inserción) ----
+order_idx  DB NUM_MAX_ESTU DUP(0)
 
 
 ; buffer para leer opcion de ordenamiento
@@ -473,7 +476,19 @@ O1_Guardar_Nota:
     mov  [bx], dx            ; HI (DX)  
                      
     call UpdateAprobDesap ; Actualizamos aprob y desap
-    call UpdateMinMax ; Actualizamos Max y Min
+    call UpdateMinMax ; Actualizamos Max y Min         
+    
+        ; --- registrar id de inserción en order_idx[idx_actual] ---
+    mov  bx, OFFSET order_idx
+    mov  al, idx_actual
+    xor  ah, ah
+    add  bx, ax
+    mov  [bx], al
+
+    inc contador_Estud
+    call MostrarEstudiantes
+    jmp Menu_Principal 
+
     
                       
     inc contador_Estud
@@ -1295,9 +1310,9 @@ O4_Asc:
     mov ah, 02h
     int 21h  
     ; ordenar
-    call BubbleSort
+    call BubbleSort_OrderIdx
     ;mostrar resultado
-    call MostrarEstudiantes
+    call MostrarEstudiantesOrdenado
     jmp Menu_Principal  
 
 O4_Desc: 
@@ -1312,9 +1327,9 @@ O4_Desc:
     mov ah, 02h
     int 21h
     ; ordenar
-    call BubbleSort
-    ; mostrar resultado
-    call MostrarEstudiantes
+    call BubbleSort_OrderIdx
+    ;mostrar resultado
+    call MostrarEstudiantesOrdenado
     jmp Menu_Principal  
     
 O4_NoSuficientes:
@@ -1350,7 +1365,7 @@ SwapNext PROC NEAR
     cmp  bl, 2
     jb   short SN_EarlyExit     ; <2 estudiantes -> salir cerca
 
-    dec  bl                     ; last = n-1
+    sub  bl, 1           ; last = n-1
     mov  ax, bp                 ; AX = i
     cmp  al, bl
     jae  short SN_EarlyExit     ; i >= last -> salir cerca
@@ -1453,78 +1468,85 @@ SN_Done:
 SwapNext ENDP
 
 
-    
+   
+
+
 
 ; ------------------------------------------------------------
-; CmpNotaIdxVsNext: compara nota[i] con nota[i+1] (32-bit)
+; CmpNotaIDs: compara nota[id1] vs nota[id2] (32-bit)
+;   ENTRA:  AL = id1,  BL = id2
+;   SALE:   AL = 0 (<), 1 (=), 2 (>)
+;   USA: AX,BX,CX,DX,SI,DI,BP (salvados)
 ; ------------------------------------------------------------
-CmpNotaIdxVsNext PROC NEAR
+CmpNotaIDs PROC NEAR
     push bx
     push cx
     push dx
     push si
     push di
+    push bp
 
-    ; ---- offset = i*2 ----
-    xor  ah, ah          ; AH=0 para que AX=i
-    mov  si, ax          ; SI = i
-    shl  si, 1           ; SI = i*2
+    ; --- v1 = DX:AX = nota[id1] ---
+    xor  ah, ah              ; AX = id1
+    mov  si, ax
+    shl  si, 1               ; si = id1*2
 
-    ;cargar v1 = DX:AX = nota[i]
     mov  di, OFFSET notas_val_lo
     add  di, si
-    mov  ax, [di]        ; AX = LO[i]
+    mov  ax, [di]            ; AX = lo[id1]
 
     mov  di, OFFSET notas_val_hi
     add  di, si
-    mov  dx, [di]        
+    mov  dx, [di]            ; DX = hi[id1]
 
-    
-    mov  bp, si
-    add  bp, 2           ; (i+1)*2
+    ; --- v2 = CX:BX = nota[id2] ---
+    xor  bh, bh              ; BL ya trae id2, limpia BH
+    mov  bp, bx              ; BP = id2
+    shl  bp, 1               ; bp = id2*2
+
     mov  di, OFFSET notas_val_lo
     add  di, bp
-    mov  bx, [di]        ; BX = LO[i+1]
+    mov  bx, [di]            ; BX = lo[id2]
 
     mov  di, OFFSET notas_val_hi
     add  di, bp
-    mov  cx, [di]        ; CX = HI[i+1] -> v2 = CX:BX
+    mov  cx, [di]            ; CX = hi[id2]
 
-   
+    ; --- DX:AX ? CX:BX ---
     sub  ax, bx
     sbb  dx, cx
+    jc   CNI_ID_Less
 
-    jc   CNI_Less        
-
-    
     or   dx, ax
-    jz   CNI_Equal        
+    jz   CNI_ID_Equal
 
-    ; Mayor
-    mov  al, 2
-    jmp  CNI_Done
+    mov  al, 2               ; mayor
+    jmp  CNI_ID_Done
 
-CNI_Less:
+CNI_ID_Less:
     mov  al, 0
-    jmp  CNI_Done
+    jmp  CNI_ID_Done
 
-CNI_Equal:
+CNI_ID_Equal:
     mov  al, 1
 
-CNI_Done:
-    xor  ah, ah          
+CNI_ID_Done:
+    pop  bp
     pop  di
     pop  si
     pop  dx
     pop  cx
     pop  bx
     ret
-CmpNotaIdxVsNext ENDP
+CmpNotaIDs ENDP
+
+   
 
 ; ------------------------------------------------------------
-; BubbleSort: ordena segun orden_modo (0=asc, 1=desc)
+; BubbleSort_OrderIdx: ordena order_idx según notas (0=asc,1=desc)
+;   NO mueve datos maestros, solo permuta IDs en order_idx.
 ; ------------------------------------------------------------
-BubbleSort PROC NEAR
+BubbleSort_OrderIdx PROC NEAR
     push ax
     push bx
     push cx
@@ -1536,66 +1558,72 @@ BubbleSort PROC NEAR
     xor ax, ax
     mov al, contador_Estud
     cmp al, 2
-    jb  BS_Done
+    jb  BSO_Done
 
-    mov bl, al         ; BL = n
-    dec bl             ; last = n-1
+    mov dh, al         ; DH = n
+    dec dh             ; last = n-1
 
-BS_Outer:
-    xor bh, bh         ; swapped = 0
-    xor cx, cx         ; CL = i = 0
+BSO_Outer:
+    xor ch, ch         ; CH = swapped = 0
+    xor cl, cl         ; CL = i = 0
 
-BS_Inner:
+BSO_Inner:
     ; while (i < last)
-    mov al, bl         ; AL = last
+    mov al, dh         ; AL = last (en DH)
     cmp cl, al
-    jae BS_AfterInner
+    jae BSO_AfterInner
 
-    ; comp = cmp(nota[i], nota[i+1])
-    mov al, cl         ; AL = i
-    call CmpNotaIdxVsNext   ; AL = 0(<),1(=),2(>)
-    mov dl, al              ; DL = comp
+    ; --- puntero a order_idx[i] en SI ---
+    mov si, OFFSET order_idx
+    mov al, cl
+    xor ah, ah
+    add si, ax         ; SI = &order_idx[i]
+
+    ; id1 = order_idx[i]  (AL)
+    mov al, [si]
+    ; id2 = order_idx[i+1] (DL)
+    mov dl, [si+1]
+
+    ; comp = cmp(id1,id2)
+    mov bl, dl         ; BL = id2 para CmpNotaIDs
+    call CmpNotaIDs    ; AL = 0(<) / 1(=) / 2(>)
+    mov dl, al         ; DL = comp
 
     ; decidir swap segun orden_modo
     mov al, orden_modo
     cmp al, 0
-    jne BS_Desc
+    jne BSO_Desc
 
-    ; ascendente: swap si comp==2
+    ; ascendente: swap si comp == 2 (id1 > id2)
     cmp dl, 2
-    jne BS_NoSwap
-    mov al, cl              ; AL = i
-    call SwapNext
-    mov bh, 1 
-    ;mov dl, '*'          ; DEBUG: marca que hubo swap
-    ;mov ah, 02h
-    ;int 21h
-    jmp BS_NoSwap
+    jne BSO_NoSwap
+    mov al, [si]
+    xchg al, [si+1]
+    mov [si], al
+    mov ch, 1
+    jmp short BSO_NoSwap
 
-BS_Desc:
-    ; descendente: swap si comp==0
+BSO_Desc:
+    ; descendente: swap si comp == 0 (id1 < id2)
     cmp dl, 0
-    jne BS_NoSwap
-    mov al, cl
-    call SwapNext
-    mov bh, 1
-    ;mov dl, '*'          ; DEBUG: marca que hubo swap
-    ;mov ah, 02h
-    ;int 21h
+    jne BSO_NoSwap
+    mov al, [si]
+    xchg al, [si+1]
+    mov [si], al
+    mov ch, 1
 
-BS_NoSwap:
+BSO_NoSwap:
     inc cl
-    jmp BS_Inner
+    jmp BSO_Inner
 
-BS_AfterInner:
-    cmp bh, 0               ; early-exit si no hubo swaps
-    je  BS_Done
+BSO_AfterInner:
+    cmp ch, 0          ; early-exit si no hubo swaps
+    je  BSO_Done
+    dec dh             ; last--
+    cmp dh, 0
+    ja  BSO_Outer
 
-    dec bl                  ;
-    cmp bl, 0
-    ja  BS_Outer
-
-BS_Done:
+BSO_Done:
     pop di
     pop si
     pop dx
@@ -1603,7 +1631,117 @@ BS_Done:
     pop bx
     pop ax
     ret
-BubbleSort ENDP
+BubbleSort_OrderIdx ENDP
+
+
+
+
+; ------------------------------------------------------------
+; MostrarEstudiantesOrdenado: imprime usando order_idx[k] -> idx
+; ------------------------------------------------------------
+MostrarEstudiantesOrdenado PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov dx, OFFSET msg_Listado
+    mov ah, 09h
+    int 21h
+
+    xor cx, cx
+    mov cl, contador_Estud
+    cmp cx, 0
+    je  MSO_Done
+
+    xor si, si                ; si = k (0..n-1)
+
+MSO_Siguiente:
+    ; idx = order_idx[k]
+    mov bx, OFFSET order_idx
+    mov ax, si          ; copiar k a AX (16 bits)
+    add bx, ax          ; BX = &order_idx[k]
+    mov al, [bx]        ; AL = id
+    xor ah, ah          ; AX = id (cero AH)
+    mov bp, ax          ; BP = id
+
+
+    ; ---- imprimir nombre de idx ----
+    mov ax, bp
+    mov bx, NOMBRE_LEN
+    mul bx
+    mov di, OFFSET nombres_Estud
+    add di, ax
+
+    mov bx, OFFSET NOMBRE_LEN_ARR
+    add bx, bp
+    mov cl, [bx]
+    xor ch, ch
+
+MSO_Print_Nombre:
+    jcxz MSO_Sig_Nombre
+    mov dl, [di]
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short MSO_Print_Nombre
+
+MSO_Sig_Nombre:
+    ; espacio
+    mov dl, ' '
+    mov ah, 02h
+    int 21h
+
+    ; ---- imprimir nota de idx ----
+    mov ax, bp
+    mov bx, NOTA_LEN
+    mul bx
+    mov di, OFFSET notas
+    add di, ax
+
+    mov bx, OFFSET NOTAS_LEN_ARR
+    add bx, bp
+    mov cl, [bx]
+    xor ch, ch
+
+MSO_Print_Nota:
+    jcxz MSO_Nueva_Linea
+    mov dl, [di]
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short MSO_Print_Nota
+
+MSO_Nueva_Linea:
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+
+    inc si
+    xor ax, ax
+    mov al, contador_Estud
+    sub ax, si
+    mov cx, ax
+    jcxz MSO_Done
+    jmp short MSO_Siguiente
+
+MSO_Done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+MostrarEstudiantesOrdenado ENDP
+
 
 
 
