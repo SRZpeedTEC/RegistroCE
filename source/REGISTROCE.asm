@@ -1270,7 +1270,12 @@ PSI_NewLine:
 PrintStudentAtIndex ENDP
 
 
-; ------- Ordenar calificaciones -------
+; ------- Ordenar calificaciones -------    
+
+; pido asc o desc y guardo orden_modo.
+; ordeno solo los IDs en order_idx.
+; muestro la lista usando el orden calculado.
+
 Opcion4:
     mov al, contador_Estud
     cmp al, 2
@@ -1339,145 +1344,15 @@ O4_NoSuficientes:
     jmp Menu_Principal
     
     
-; ------------------------------------------------------------
-; SwapAdj: Intercambia i y j en cada regsitro por estudiante (parte del bubble)
-; ------------------------------------------------------------         
-
-SwapNext PROC NEAR
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push bp
-
-    cld
-
-    ; Guardar i en BP (16 bits)
-    xor  ah, ah
-    mov  bp, ax                 ; BP = i
-
-    ; --- ValidaciÃ³n: i < contador_Estud-1 ---
-    mov  bl, contador_Estud
-    cmp  bl, 2
-    jb   short SN_EarlyExit     ; <2 estudiantes -> salir cerca
-
-    sub  bl, 1           ; last = n-1
-    mov  ax, bp                 ; AX = i
-    cmp  al, bl
-    jae  short SN_EarlyExit     ; i >= last -> salir cerca
-
-    jmp  short SN_AfterGuards   ; *** saltar el stub en flujo normal ***
-
-SN_EarlyExit:
-    jmp  SN_Done                ; salto near (al epÃ­logo comÃºn)
-
-SN_AfterGuards:
-    ; ES = DS por si en otra parte se cambiÃ³
-    mov  ax, ds
-    mov  es, ax
-
-    ; 1) NOMBRE (30 bytes): BX = i*30  (MUL para 8086)
-    mov  ax, bp
-    mov  bx, 30
-    push dx
-    mul  bx                     ; DX:AX = i*30
-    mov  bx, ax
-    pop  dx
-
-    mov  si, OFFSET nombres_Estud
-    add  si, bx
-    mov  di, si
-    add  di, NOMBRE_LEN
-    mov  cx, NOMBRE_LEN
-SN_SwapNombreLoop:
-    lodsb
-    xchg al, [di]
-    mov  [si-1], al
-    inc  di
-    loop SN_SwapNombreLoop
-
-    ; 2) NOMBRE_LEN_ARR (1 byte)
-    mov  ax, bp
-    mov  di, OFFSET NOMBRE_LEN_ARR
-    add  di, ax
-    mov  dl, [di]
-    xchg dl, BYTE PTR [di+1]
-    mov  [di], dl
-
-    ; 3) NOTAS (9 bytes): BX = i*9  (MUL para 8086)
-    mov  ax, bp
-    mov  bx, 9
-    push dx
-    mul  bx                     ; DX:AX = i*9
-    mov  bx, ax
-    pop  dx
-
-    mov  si, OFFSET notas
-    add  si, bx
-    mov  di, si
-    add  di, NOTA_LEN
-    mov  cx, NOTA_LEN
-SN_SwapNotaLoop:
-    lodsb
-    xchg al, [di]
-    mov  [si-1], al
-    inc  di
-    loop SN_SwapNotaLoop
-
-    ; 4) NOTAS_LEN_ARR (1 byte)
-    mov  ax, bp
-    mov  di, OFFSET NOTAS_LEN_ARR
-    add  di, ax
-    mov  dl, [di]
-    xchg dl, BYTE PTR [di+1]
-    mov  [di], dl
-
-    ; 5) notas_val_lo (word)
-    mov  ax, bp
-    shl  ax, 1                  ; i*2
-    mov  di, OFFSET notas_val_lo
-    add  di, ax
-    mov  dx, [di]
-    xchg dx, WORD PTR [di+2]
-    mov  [di], dx
-
-    ; 6) notas_val_hi (word)
-    mov  ax, bp
-    shl  ax, 1
-    mov  di, OFFSET notas_val_hi
-    add  di, ax
-    mov  dx, [di]
-    xchg dx, WORD PTR [di+2]
-    mov  [di], dx
-
-SN_Done:
-    pop  bp
-    pop  es
-    pop  di
-    pop  si
-    pop  dx
-    pop  cx
-    pop  bx
-    pop  ax
-    popf
-    ret
-SwapNext ENDP
 
 
    
 
 
+; compara notas por ID de inserción.
+; carga DX:AX y CX:BX de id1 e id2.
+; devuelve 0,1,2 igual que el comparador original.
 
-; ------------------------------------------------------------
-; CmpNotaIDs: compara nota[id1] vs nota[id2] (32-bit)
-;   ENTRA:  AL = id1,  BL = id2
-;   SALE:   AL = 0 (<), 1 (=), 2 (>)
-;   USA: AX,BX,CX,DX,SI,DI,BP (salvados)
-; ------------------------------------------------------------
 CmpNotaIDs PROC NEAR
     push bx
     push cx
@@ -1499,10 +1374,10 @@ CmpNotaIDs PROC NEAR
     add  di, si
     mov  dx, [di]            ; DX = hi[id1]
 
-    ; --- v2 = CX:BX = nota[id2] ---
+    
     xor  bh, bh              ; BL ya trae id2, limpia BH
-    mov  bp, bx              ; BP = id2
-    shl  bp, 1               ; bp = id2*2
+    mov  bp, bx              
+    shl  bp, 1               
 
     mov  di, OFFSET notas_val_lo
     add  di, bp
@@ -1512,7 +1387,7 @@ CmpNotaIDs PROC NEAR
     add  di, bp
     mov  cx, [di]            ; CX = hi[id2]
 
-    ; --- DX:AX ? CX:BX ---
+    
     sub  ax, bx
     sbb  dx, cx
     jc   CNI_ID_Less
@@ -1520,7 +1395,7 @@ CmpNotaIDs PROC NEAR
     or   dx, ax
     jz   CNI_ID_Equal
 
-    mov  al, 2               ; mayor
+    mov  al, 2              
     jmp  CNI_ID_Done
 
 CNI_ID_Less:
@@ -1541,11 +1416,9 @@ CNI_ID_Done:
 CmpNotaIDs ENDP
 
    
-
-; ------------------------------------------------------------
-; BubbleSort_OrderIdx: ordena order_idx según notas (0=asc,1=desc)
-;   NO mueve datos maestros, solo permuta IDs en order_idx.
-; ------------------------------------------------------------
+; burbuja sobre order_idx sin tocar datos del array principal.
+; permuta bytes de IDs según orden_modo.
+; corta temprano si no hay swaps.
 BubbleSort_OrderIdx PROC NEAR
     push ax
     push bx
@@ -1560,20 +1433,19 @@ BubbleSort_OrderIdx PROC NEAR
     cmp al, 2
     jb  BSO_Done
 
-    mov dh, al         ; DH = n
-    dec dh             ; last = n-1
+    mov dh, al         
+    dec dh             
 
 BSO_Outer:
-    xor ch, ch         ; CH = swapped = 0
-    xor cl, cl         ; CL = i = 0
+    xor ch, ch         
+    xor cl, cl         
 
 BSO_Inner:
-    ; while (i < last)
-    mov al, dh         ; AL = last (en DH)
+    mov al, dh         
     cmp cl, al
     jae BSO_AfterInner
 
-    ; --- puntero a order_idx[i] en SI ---
+    ;puntero a order_idx[i] en SI ---
     mov si, OFFSET order_idx
     mov al, cl
     xor ah, ah
@@ -1585,9 +1457,9 @@ BSO_Inner:
     mov dl, [si+1]
 
     ; comp = cmp(id1,id2)
-    mov bl, dl         ; BL = id2 para CmpNotaIDs
-    call CmpNotaIDs    ; AL = 0(<) / 1(=) / 2(>)
-    mov dl, al         ; DL = comp
+    mov bl, dl         
+    call CmpNotaIDs    
+    mov dl, al         
 
     ; decidir swap segun orden_modo
     mov al, orden_modo
@@ -1619,7 +1491,7 @@ BSO_NoSwap:
 BSO_AfterInner:
     cmp ch, 0          ; early-exit si no hubo swaps
     je  BSO_Done
-    dec dh             ; last--
+    dec dh             
     cmp dh, 0
     ja  BSO_Outer
 
@@ -1656,16 +1528,16 @@ MostrarEstudiantesOrdenado PROC NEAR
     cmp cx, 0
     je  MSO_Done
 
-    xor si, si                ; si = k (0..n-1)
+    xor si, si                
 
 MSO_Siguiente:
     ; idx = order_idx[k]
     mov bx, OFFSET order_idx
-    mov ax, si          ; copiar k a AX (16 bits)
-    add bx, ax          ; BX = &order_idx[k]
-    mov al, [bx]        ; AL = id
-    xor ah, ah          ; AX = id (cero AH)
-    mov bp, ax          ; BP = id
+    mov ax, si          
+    add bx, ax          
+    mov al, [bx]        
+    xor ah, ah          
+    mov bp, ax          
 
 
     ; ---- imprimir nombre de idx ----
