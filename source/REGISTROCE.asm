@@ -24,10 +24,11 @@ msg_Mostrar_Stats DB 13, 10, '(2) Mostrar estadisticas', '$'
 msg_Buscar_Estud DB 13, 10, '(3) Buscar estudiantes por posicion', '$'
 msg_Ordenar_Calid DB 13, 10, '(4) Ordenar calificaciones', '$'
 msg_Salir DB 13, 10, '(5) Salir', '$'
-msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5): $'
+msg_OP_Benchmark DB 13, 10, '(6) Benchmark', '$'
+msg_Opciones  DB 13,10, 'Ingrese una opcion (1-6): $'
 
 ;mensajes de error
-msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-5', 13, 10, '$'
+msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-6', 13, 10, '$'
 msg_Error_Indice DB 13, 10, 'Se ha ingresado un valor fuera del rango. No existe un estudiante con ese indice', 13, 10, '$'
 
 
@@ -63,9 +64,14 @@ msg_No_Suf_Orden DB 13,10,'No hay suficientes estudiantes para ordenar (se requi
 ;mensajes de salir programa
 msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'
 
+;mensaje del benchmark
+msg_Benchmark DB 13, 10, 'Ingrese la cantidad de iteraciones de busqueda que desea realizar', 13, 10, '$'
+msg_IterPrefix    DB 'Iteracion $'
+msg_ColonSpace    DB ': $'
+
 ; INPUTS Y MEMORIA ----> DOS line input buffers (AH=0Ah): [max][count][data]
 
-buf_Contador    DB 3,0, 3 DUP(?)
+buf_Contador    DB 6,0, 6 DUP(?)
 buf_Nombre     DB NOMBRE_LEN,0, NOMBRE_LEN DUP(?)
 bufNota    DB NOTA_LEN,0, NOTA_LEN DUP(?)
 
@@ -80,6 +86,10 @@ NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
 notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)      
 
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
+
+bench_iters  DW 0
+bench_iter_cur  DW 0   ; contador actual de iteración
+bench_idx       DW 0   ; índice 0-based del estudiante a consultar
 
 
 ; ----------------- VARIABLES PARA ESTADISTICAS ----------------------------
@@ -119,7 +129,7 @@ digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir
 ; max=2 -> permitimos 1 caracter + CR
 buf_Opcion   DB 2,0, 2 DUP(0)   
 
-; ---- Orden indirecto (IDs de inserci�n) ----
+; ---- Orden indirecto (IDs de inserci�n) ----
 order_idx  DB NUM_MAX_ESTU DUP(0)
 
 
@@ -151,7 +161,7 @@ Menu_Principal:
     mov ah, 09h
     int 21h
 
-    ; Opciones (1 a 5)
+    ; Opciones (1 a 6)
     mov dx, OFFSET msg_Ingresar_Calif   ; (1) Registrar/Ingresar calificaciones
     mov ah, 09h
     int 21h
@@ -169,6 +179,10 @@ Menu_Principal:
     int 21h
 
     mov dx, OFFSET msg_Salir            ; (5) Salir/Cerrar el programa
+    mov ah, 09h
+    int 21h
+
+    mov dx, OFFSET msg_OP_Benchmark            ; (6) Benchmark
     mov ah, 09h
     int 21h
 
@@ -193,7 +207,7 @@ Inputs:
     ; primer char se guarda en bl
     mov bl, [buf_Opcion+2]
 
-; ------------------ Jumps condicionales cortos (solucion jumps out of range)------------------
+; ------------------ Jumps condicionales (solucion jumps out of range)------------------
     cmp bl, '1'
     jne  _No1
     jmp  Opcion1
@@ -211,11 +225,14 @@ _No3:
     jmp  Opcion4
 _No4:
     cmp bl, '5'
-    jne  _Error
+    jne  _No5
     jmp  Opcion5
-
+_No5:
+    cmp bl, '6'
+    jne _Error
+    jmp Opcion6
 _Error:
-    jmp  Opcion6
+    jmp  Opcion7
 
 ; ------------------ RUTAS DE OPCIÓN ------------------
 
@@ -478,7 +495,7 @@ O1_Guardar_Nota:
     call UpdateAprobDesap ; Actualizamos aprob y desap
     call UpdateMinMax ; Actualizamos Max y Min         
     
-        ; --- registrar id de inserci�n en order_idx[idx_actual] ---
+        ; --- registrar id de inserci�n en order_idx[idx_actual] ---
     mov  bx, OFFSET order_idx
     mov  al, idx_actual
     xor  ah, ah
@@ -1349,7 +1366,7 @@ O4_NoSuficientes:
    
 
 
-; compara notas por ID de inserci�n.
+; compara notas por ID de inserci�n.
 ; carga DX:AX y CX:BX de id1 e id2.
 ; devuelve 0,1,2 igual que el comparador original.
 
@@ -1417,7 +1434,7 @@ CmpNotaIDs ENDP
 
    
 ; burbuja sobre order_idx sin tocar datos del array principal.
-; permuta bytes de IDs seg�n orden_modo.
+; permuta bytes de IDs seg�n orden_modo.
 ; corta temprano si no hay swaps.
 BubbleSort_OrderIdx PROC NEAR
     push ax
@@ -1626,12 +1643,225 @@ Opcion5:
     jmp Fin_Programa
 
 
+; ------- Benchmark -------
+; ---------- Opcion 6: Benchmark ----------
+Opcion6:
+    ; validar que existan estudiantes
+    mov  al, contador_Estud
+    or   al, al
+    jnz  O6_AskIters
+    mov  dx, OFFSET msg_NoEstudiantes
+    mov  ah, 09h
+    int  21h
+    jmp  Menu_Principal
+
+; --- pedir cantidad de iteraciones (1..65535) ---
+O6_AskIters:
+    mov  dx, OFFSET msg_Benchmark
+    mov  ah, 09h
+    int  21h
+O6_ReadIter:
+    mov  ah, 0Ch
+    mov  al, 0Ah
+    mov  dx, OFFSET buf_Contador
+    int  21h
+    mov  al, [buf_Contador+1]
+    cmp  al, 1
+    jb   O6_ReadIter
+
+    ; AX = número leído 
+    xor  ax, ax
+    mov  cl, [buf_Contador+1]
+    mov  si, OFFSET buf_Contador+2
+O6_ParseIterLoop:
+    mov  bl, [si]
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O6_ReadIter
+    push bx               ; guardar dígito (0..9) en la pila
+    mov  bx, 10
+    mul  bx               ; DX:AX = AX*10
+    or   dx, dx
+    jnz  O6_ReadIter      ; overflow (>65535)
+    pop  bx               ; recuperar dígito
+    xor  bh, bh
+    add  ax, bx           ; AX = AX*10 + dígito
+    jc   O6_ReadIter
+    inc  si
+    dec  cl
+    jnz  O6_ParseIterLoop
+
+    cmp  ax, 1
+    jb   O6_ReadIter
+    mov  bench_iters, ax      ; **GUARDAR** total
+    mov  bench_iter_cur, 0    ; **reiniciar** contador
+
+; --- pedir ID de estudiante (1..contador_Estud) ---
+O6_AskID:
+    mov  dx, OFFSET msg_Buscar_Idx
+    mov  ah, 09h
+    int  21h
+O6_ReadID:
+    mov  ah, 0Ch
+    mov  al, 0Ah
+    mov  dx, OFFSET buf_Contador
+    int  21h
+    mov  al, [buf_Contador+1]
+    cmp  al, 1
+    jb   O6_ReadID
+
+    xor  ax, ax
+    mov  cl, [buf_Contador+1]
+    mov  si, OFFSET buf_Contador+2
+O6_ParseIdLoop:
+    mov  bl, [si]
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O6_ReadID
+    push bx
+    mov  bx, 10
+    mul  bx
+    or   dx, dx
+    jnz  O6_ReadID
+    pop  bx
+    xor  bh, bh
+    add  ax, bx
+    jc   O6_ReadID
+    inc  si
+    dec  cl
+    jnz  O6_ParseIdLoop
+
+    ; validar rango y guardar índice 0-based
+    cmp  ax, 1
+    jb   O6_AskID
+    cmp  al, contador_Estud
+    ja   O6_AskID
+    dec  ax
+    mov  bench_idx, ax
+
+; --- bucle de iteraciones ---
+O6_Loop:
+    inc  bench_iter_cur
+
+    mov  dx, OFFSET msg_IterPrefix
+    mov  ah, 09h
+    int  21h
+
+    mov  ax, bench_iter_cur
+    call PrintUIntAX
+
+    mov  dx, OFFSET msg_ColonSpace
+    mov  ah, 09h
+    int  21h
+
+    mov  ax, bench_idx
+    call PrintStudentAtIndex
+
+    mov  ax, bench_iter_cur
+    cmp  ax, bench_iters
+    jb   O6_Loop
+
+    jmp  Menu_Principal
+
+
+
+
+PrintUIntAX PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; caso AX=0
+    cmp  ax, 0
+    jne  pux_build
+    mov  dl, '0'
+    mov  ah, 02h
+    int  21h
+    jmp  pux_done
+
+pux_build:
+    xor  cx, cx            ; contador de dígitos en la pila
+pux_divloop:
+    xor  dx, dx
+    mov  bx, 10
+    div  bx                ; AX = AX/10, DX = resto (0..9)
+    push dx                ; guardar resto
+    inc  cx
+    cmp  ax, 0
+    jne  pux_divloop
+
+pux_print:
+    pop  dx
+    add  dl, '0'
+    mov  ah, 02h
+    int  21h
+    loop pux_print
+
+pux_done:
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
+PrintUIntAX ENDP
+
+
+TouchStudentAtIndex PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    xor  ah, ah
+    mov  si, ax                     ; SI = idx
+
+    ; --- tocar nombre ---
+    mov  ax, si
+    mov  bx, NOMBRE_LEN
+    mul  bx
+    mov  di, OFFSET nombres_Estud
+    add  di, ax
+    mov  bx, OFFSET NOMBRE_LEN_ARR
+    add  bx, si
+    mov  cl, [bx]
+    jcxz TS_SkipName
+    mov  dl, [di]                   
+TS_SkipName:
+
+    ; --- tocar nota (texto) ---
+    mov  ax, si
+    mov  bx, NOTA_LEN
+    mul  bx
+    mov  di, OFFSET notas
+    add  di, ax
+    mov  bx, OFFSET NOTAS_LEN_ARR
+    add  bx, si
+    mov  cl, [bx]
+    jcxz TS_Done
+    mov  dl, [di]
+
+TS_Done:
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
+TouchStudentAtIndex ENDP
+
+
+
 ; ------- Manejo error en menu -------
-Opcion6: 
+Opcion7: 
     mov dx, OFFSET msg_Error_Menu
     mov ah, 09h
     int 21h
     jmp Inputs 
+
 
 ; ------------------ SALIDA ------------------
 Fin_Programa:

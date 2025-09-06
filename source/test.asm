@@ -24,10 +24,11 @@ msg_Mostrar_Stats DB 13, 10, '(2) Mostrar estadisticas', '$'
 msg_Buscar_Estud DB 13, 10, '(3) Buscar estudiantes por posicion', '$'
 msg_Ordenar_Calid DB 13, 10, '(4) Ordenar calificaciones', '$'
 msg_Salir DB 13, 10, '(5) Salir', '$'
-msg_Opciones  DB 13,10, 'Ingrese una opcion (1-5): $'
+msg_OP_Benchmark DB 13, 10, '(6) Benchmark', '$'
+msg_Opciones  DB 13,10, 'Ingrese una opcion (1-6): $'
 
 ;mensajes de error
-msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-5', 13, 10, '$'
+msg_Error_Menu DB 13, 10, 'Se ha ingresado un valor fuera del rango. Por favor ingresar un valor entre 1-6', 13, 10, '$'
 msg_Error_Indice DB 13, 10, 'Se ha ingresado un valor fuera del rango. No existe un estudiante con ese indice', 13, 10, '$'
 
 
@@ -63,9 +64,14 @@ msg_No_Suf_Orden DB 13,10,'No hay suficientes estudiantes para ordenar (se requi
 ;mensajes de salir programa
 msg_End DB 13, 10, 'Usted ha salido del registro. El programa se cerro', 13, 10, '$'
 
+;mensaje del benchmark
+msg_Benchmark DB 13, 10, 'Ingrese la cantidad de iteraciones de busqueda que desea realizar', 13, 10, '$'
+msg_IterPrefix    DB 'Iteracion $'
+msg_ColonSpace    DB ': $'
+
 ; INPUTS Y MEMORIA ----> DOS line input buffers (AH=0Ah): [max][count][data]
 
-buf_Contador    DB 3,0, 3 DUP(?)
+buf_Contador    DB 6,0, 6 DUP(?)
 buf_Nombre     DB NOMBRE_LEN,0, NOMBRE_LEN DUP(?)
 bufNota    DB NOTA_LEN,0, NOTA_LEN DUP(?)
 
@@ -80,6 +86,10 @@ NOMBRE_LEN_ARR  DB NUM_MAX_ESTU           DUP(0)
 notas      DB NUM_MAX_ESTU*NOTA_LEN DUP(0)      
 
 NOTAS_LEN_ARR DB NUM_MAX_ESTU           DUP(0)  
+
+bench_iters  DW 0
+bench_iter_cur  DW 0   ; contador actual de iteración
+bench_idx       DW 0   ; índice 0-based del estudiante a consultar
 
 
 ; ----------------- VARIABLES PARA ESTADISTICAS ----------------------------
@@ -117,7 +127,10 @@ digits_buf DB 12 DUP(0)   ; buffer temporal para imprimir
 
 ; buffer para AH=0Ah: [max][count][data...]
 ; max=2 -> permitimos 1 caracter + CR
-buf_Opcion   DB 2,0, 2 DUP(0)  
+buf_Opcion   DB 2,0, 2 DUP(0)   
+
+; ---- Orden indirecto (IDs de inserci�n) ----
+order_idx  DB NUM_MAX_ESTU DUP(0)
 
 
 ; buffer para leer opcion de ordenamiento
@@ -148,7 +161,7 @@ Menu_Principal:
     mov ah, 09h
     int 21h
 
-    ; Opciones (1 a 5)
+    ; Opciones (1 a 6)
     mov dx, OFFSET msg_Ingresar_Calif   ; (1) Registrar/Ingresar calificaciones
     mov ah, 09h
     int 21h
@@ -166,6 +179,10 @@ Menu_Principal:
     int 21h
 
     mov dx, OFFSET msg_Salir            ; (5) Salir/Cerrar el programa
+    mov ah, 09h
+    int 21h
+
+    mov dx, OFFSET msg_OP_Benchmark            ; (6) Benchmark
     mov ah, 09h
     int 21h
 
@@ -190,7 +207,7 @@ Inputs:
     ; primer char se guarda en bl
     mov bl, [buf_Opcion+2]
 
-; ------------------ Jumps condicionales cortos (solucion jumps out of range)------------------
+; ------------------ Jumps condicionales (solucion jumps out of range)------------------
     cmp bl, '1'
     jne  _No1
     jmp  Opcion1
@@ -208,11 +225,14 @@ _No3:
     jmp  Opcion4
 _No4:
     cmp bl, '5'
-    jne  _Error
+    jne  _No5
     jmp  Opcion5
-
+_No5:
+    cmp bl, '6'
+    jne _Error
+    jmp Opcion6
 _Error:
-    jmp  Opcion6
+    jmp  Opcion7
 
 ; ------------------ RUTAS DE OPCIÓN ------------------
 
@@ -473,7 +493,19 @@ O1_Guardar_Nota:
     mov  [bx], dx            ; HI (DX)  
                      
     call UpdateAprobDesap ; Actualizamos aprob y desap
-    call UpdateMinMax ; Actualizamos Max y Min
+    call UpdateMinMax ; Actualizamos Max y Min         
+    
+        ; --- registrar id de inserci�n en order_idx[idx_actual] ---
+    mov  bx, OFFSET order_idx
+    mov  al, idx_actual
+    xor  ah, ah
+    add  bx, ax
+    mov  [bx], al
+
+    inc contador_Estud
+    call MostrarEstudiantes
+    jmp Menu_Principal 
+
     
                       
     inc contador_Estud
@@ -1255,7 +1287,12 @@ PSI_NewLine:
 PrintStudentAtIndex ENDP
 
 
-; ------- Ordenar calificaciones -------
+; ------- Ordenar calificaciones -------    
+
+; pido asc o desc y guardo orden_modo.
+; ordeno solo los IDs en order_idx.
+; muestro la lista usando el orden calculado.
+
 Opcion4:
     mov al, contador_Estud
     cmp al, 2
@@ -1295,9 +1332,9 @@ O4_Asc:
     mov ah, 02h
     int 21h  
     ; ordenar
-    call BubbleSort
+    call BubbleSort_OrderIdx
     ;mostrar resultado
-    call MostrarEstudiantes
+    call MostrarEstudiantesOrdenado
     jmp Menu_Principal  
 
 O4_Desc: 
@@ -1312,9 +1349,9 @@ O4_Desc:
     mov ah, 02h
     int 21h
     ; ordenar
-    call BubbleSort
-    ; mostrar resultado
-    call MostrarEstudiantes
+    call BubbleSort_OrderIdx
+    ;mostrar resultado
+    call MostrarEstudiantesOrdenado
     jmp Menu_Principal  
     
 O4_NoSuficientes:
@@ -1324,207 +1361,82 @@ O4_NoSuficientes:
     jmp Menu_Principal
     
     
-; ------------------------------------------------------------
-; SwapAdj: Intercambia i y j en cada regsitro por estudiante (parte del bubble)
-; ------------------------------------------------------------         
 
-SwapNext PROC NEAR
-    pushf
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push bp
-
-    cld
-
-    ; Guardar i en BP (16 bits)
-    xor  ah, ah
-    mov  bp, ax                 ; BP = i
-
-    ; --- Validación: i < contador_Estud-1 ---
-    mov  bl, contador_Estud
-    cmp  bl, 2
-    jb   short SN_EarlyExit     ; <2 estudiantes -> salir cerca
-
-    dec  bl                     ; last = n-1
-    mov  ax, bp                 ; AX = i
-    cmp  al, bl
-    jae  short SN_EarlyExit     ; i >= last -> salir cerca
-
-    jmp  short SN_AfterGuards   ; *** saltar el stub en flujo normal ***
-
-SN_EarlyExit:
-    jmp  SN_Done                ; salto near (al epílogo común)
-
-SN_AfterGuards:
-    ; ES = DS por si en otra parte se cambió
-    mov  ax, ds
-    mov  es, ax
-
-    ; 1) NOMBRE (30 bytes): BX = i*30  (MUL para 8086)
-    mov  ax, bp
-    mov  bx, 30
-    push dx
-    mul  bx                     ; DX:AX = i*30
-    mov  bx, ax
-    pop  dx
-
-    mov  si, OFFSET nombres_Estud
-    add  si, bx
-    mov  di, si
-    add  di, NOMBRE_LEN
-    mov  cx, NOMBRE_LEN
-SN_SwapNombreLoop:
-    lodsb
-    xchg al, [di]
-    mov  [si-1], al
-    inc  di
-    loop SN_SwapNombreLoop
-
-    ; 2) NOMBRE_LEN_ARR (1 byte)
-    mov  ax, bp
-    mov  di, OFFSET NOMBRE_LEN_ARR
-    add  di, ax
-    mov  dl, [di]
-    xchg dl, BYTE PTR [di+1]
-    mov  [di], dl
-
-    ; 3) NOTAS (9 bytes): BX = i*9  (MUL para 8086)
-    mov  ax, bp
-    mov  bx, 9
-    push dx
-    mul  bx                     ; DX:AX = i*9
-    mov  bx, ax
-    pop  dx
-
-    mov  si, OFFSET notas
-    add  si, bx
-    mov  di, si
-    add  di, NOTA_LEN
-    mov  cx, NOTA_LEN
-SN_SwapNotaLoop:
-    lodsb
-    xchg al, [di]
-    mov  [si-1], al
-    inc  di
-    loop SN_SwapNotaLoop
-
-    ; 4) NOTAS_LEN_ARR (1 byte)
-    mov  ax, bp
-    mov  di, OFFSET NOTAS_LEN_ARR
-    add  di, ax
-    mov  dl, [di]
-    xchg dl, BYTE PTR [di+1]
-    mov  [di], dl
-
-    ; 5) notas_val_lo (word)
-    mov  ax, bp
-    shl  ax, 1                  ; i*2
-    mov  di, OFFSET notas_val_lo
-    add  di, ax
-    mov  dx, [di]
-    xchg dx, WORD PTR [di+2]
-    mov  [di], dx
-
-    ; 6) notas_val_hi (word)
-    mov  ax, bp
-    shl  ax, 1
-    mov  di, OFFSET notas_val_hi
-    add  di, ax
-    mov  dx, [di]
-    xchg dx, WORD PTR [di+2]
-    mov  [di], dx
-
-SN_Done:
-    pop  bp
-    pop  es
-    pop  di
-    pop  si
-    pop  dx
-    pop  cx
-    pop  bx
-    pop  ax
-    popf
-    ret
-SwapNext ENDP
-
-
-    
-
-; ------------------------------------------------------------
-; CmpNotaIdxVsNext: compara nota[i] con nota[i+1] (32-bit)
-; ------------------------------------------------------------
-CmpNotaIdxVsNext PROC NEAR
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    ; ---- offset = i*2 ----
-    xor  ah, ah          ; AH=0 para que AX=i
-    mov  si, ax          ; SI = i
-    shl  si, 1           ; SI = i*2
-
-    ;cargar v1 = DX:AX = nota[i]
-    mov  di, OFFSET notas_val_lo
-    add  di, si
-    mov  ax, [di]        ; AX = LO[i]
-
-    mov  di, OFFSET notas_val_hi
-    add  di, si
-    mov  dx, [di]        
-
-    
-    mov  bp, si
-    add  bp, 2           ; (i+1)*2
-    mov  di, OFFSET notas_val_lo
-    add  di, bp
-    mov  bx, [di]        ; BX = LO[i+1]
-
-    mov  di, OFFSET notas_val_hi
-    add  di, bp
-    mov  cx, [di]        ; CX = HI[i+1] -> v2 = CX:BX
 
    
-    sub  ax, bx
-    sbb  dx, cx
 
-    jc   CNI_Less        
+
+; compara notas por ID de inserci�n.
+; carga DX:AX y CX:BX de id1 e id2.
+; devuelve 0,1,2 igual que el comparador original.
+
+CmpNotaIDs PROC NEAR
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    ; --- v1 = DX:AX = nota[id1] ---
+    xor  ah, ah              ; AX = id1
+    mov  si, ax
+    shl  si, 1               ; si = id1*2
+
+    mov  di, OFFSET notas_val_lo
+    add  di, si
+    mov  ax, [di]            ; AX = lo[id1]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, si
+    mov  dx, [di]            ; DX = hi[id1]
 
     
+    xor  bh, bh              ; BL ya trae id2, limpia BH
+    mov  bp, bx              
+    shl  bp, 1               
+
+    mov  di, OFFSET notas_val_lo
+    add  di, bp
+    mov  bx, [di]            ; BX = lo[id2]
+
+    mov  di, OFFSET notas_val_hi
+    add  di, bp
+    mov  cx, [di]            ; CX = hi[id2]
+
+    
+    sub  ax, bx
+    sbb  dx, cx
+    jc   CNI_ID_Less
+
     or   dx, ax
-    jz   CNI_Equal        
+    jz   CNI_ID_Equal
 
-    ; Mayor
-    mov  al, 2
-    jmp  CNI_Done
+    mov  al, 2              
+    jmp  CNI_ID_Done
 
-CNI_Less:
+CNI_ID_Less:
     mov  al, 0
-    jmp  CNI_Done
+    jmp  CNI_ID_Done
 
-CNI_Equal:
+CNI_ID_Equal:
     mov  al, 1
 
-CNI_Done:
-    xor  ah, ah          
+CNI_ID_Done:
+    pop  bp
     pop  di
     pop  si
     pop  dx
     pop  cx
     pop  bx
     ret
-CmpNotaIdxVsNext ENDP
+CmpNotaIDs ENDP
 
-; ------------------------------------------------------------
-; BubbleSort: ordena segun orden_modo (0=asc, 1=desc)
-; ------------------------------------------------------------
-BubbleSort PROC NEAR
+   
+; burbuja sobre order_idx sin tocar datos del array principal.
+; permuta bytes de IDs seg�n orden_modo.
+; corta temprano si no hay swaps.
+BubbleSort_OrderIdx PROC NEAR
     push ax
     push bx
     push cx
@@ -1536,66 +1448,71 @@ BubbleSort PROC NEAR
     xor ax, ax
     mov al, contador_Estud
     cmp al, 2
-    jb  BS_Done
+    jb  BSO_Done
 
-    mov bl, al         ; BL = n
-    dec bl             ; last = n-1
+    mov dh, al         
+    dec dh             
 
-BS_Outer:
-    xor bh, bh         ; swapped = 0
-    xor cx, cx         ; CL = i = 0
+BSO_Outer:
+    xor ch, ch         
+    xor cl, cl         
 
-BS_Inner:
-    ; while (i < last)
-    mov al, bl         ; AL = last
+BSO_Inner:
+    mov al, dh         
     cmp cl, al
-    jae BS_AfterInner
+    jae BSO_AfterInner
 
-    ; comp = cmp(nota[i], nota[i+1])
-    mov al, cl         ; AL = i
-    call CmpNotaIdxVsNext   ; AL = 0(<),1(=),2(>)
-    mov dl, al              ; DL = comp
+    ;puntero a order_idx[i] en SI ---
+    mov si, OFFSET order_idx
+    mov al, cl
+    xor ah, ah
+    add si, ax         ; SI = &order_idx[i]
+
+    ; id1 = order_idx[i]  (AL)
+    mov al, [si]
+    ; id2 = order_idx[i+1] (DL)
+    mov dl, [si+1]
+
+    ; comp = cmp(id1,id2)
+    mov bl, dl         
+    call CmpNotaIDs    
+    mov dl, al         
 
     ; decidir swap segun orden_modo
     mov al, orden_modo
     cmp al, 0
-    jne BS_Desc
+    jne BSO_Desc
 
-    ; ascendente: swap si comp==2
+    ; ascendente: swap si comp == 2 (id1 > id2)
     cmp dl, 2
-    jne BS_NoSwap
-    mov al, cl              ; AL = i
-    call SwapNext
-    mov bh, 1 
-    ;mov dl, '*'          ; DEBUG: marca que hubo swap
-    ;mov ah, 02h
-    ;int 21h
-    jmp BS_NoSwap
+    jne BSO_NoSwap
+    mov al, [si]
+    xchg al, [si+1]
+    mov [si], al
+    mov ch, 1
+    jmp short BSO_NoSwap
 
-BS_Desc:
-    ; descendente: swap si comp==0
+BSO_Desc:
+    ; descendente: swap si comp == 0 (id1 < id2)
     cmp dl, 0
-    jne BS_NoSwap
-    mov al, cl
-    call SwapNext
-    mov bh, 1
-    ;mov dl, '*'          ; DEBUG: marca que hubo swap
-    ;mov ah, 02h
-    ;int 21h
+    jne BSO_NoSwap
+    mov al, [si]
+    xchg al, [si+1]
+    mov [si], al
+    mov ch, 1
 
-BS_NoSwap:
+BSO_NoSwap:
     inc cl
-    jmp BS_Inner
+    jmp BSO_Inner
 
-BS_AfterInner:
-    cmp bh, 0               ; early-exit si no hubo swaps
-    je  BS_Done
+BSO_AfterInner:
+    cmp ch, 0          ; early-exit si no hubo swaps
+    je  BSO_Done
+    dec dh             
+    cmp dh, 0
+    ja  BSO_Outer
 
-    dec bl                  ;
-    cmp bl, 0
-    ja  BS_Outer
-
-BS_Done:
+BSO_Done:
     pop di
     pop si
     pop dx
@@ -1603,7 +1520,117 @@ BS_Done:
     pop bx
     pop ax
     ret
-BubbleSort ENDP
+BubbleSort_OrderIdx ENDP
+
+
+
+
+; ------------------------------------------------------------
+; MostrarEstudiantesOrdenado: imprime usando order_idx[k] -> idx
+; ------------------------------------------------------------
+MostrarEstudiantesOrdenado PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov dx, OFFSET msg_Listado
+    mov ah, 09h
+    int 21h
+
+    xor cx, cx
+    mov cl, contador_Estud
+    cmp cx, 0
+    je  MSO_Done
+
+    xor si, si                
+
+MSO_Siguiente:
+    ; idx = order_idx[k]
+    mov bx, OFFSET order_idx
+    mov ax, si          
+    add bx, ax          
+    mov al, [bx]        
+    xor ah, ah          
+    mov bp, ax          
+
+
+    ; ---- imprimir nombre de idx ----
+    mov ax, bp
+    mov bx, NOMBRE_LEN
+    mul bx
+    mov di, OFFSET nombres_Estud
+    add di, ax
+
+    mov bx, OFFSET NOMBRE_LEN_ARR
+    add bx, bp
+    mov cl, [bx]
+    xor ch, ch
+
+MSO_Print_Nombre:
+    jcxz MSO_Sig_Nombre
+    mov dl, [di]
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short MSO_Print_Nombre
+
+MSO_Sig_Nombre:
+    ; espacio
+    mov dl, ' '
+    mov ah, 02h
+    int 21h
+
+    ; ---- imprimir nota de idx ----
+    mov ax, bp
+    mov bx, NOTA_LEN
+    mul bx
+    mov di, OFFSET notas
+    add di, ax
+
+    mov bx, OFFSET NOTAS_LEN_ARR
+    add bx, bp
+    mov cl, [bx]
+    xor ch, ch
+
+MSO_Print_Nota:
+    jcxz MSO_Nueva_Linea
+    mov dl, [di]
+    mov ah, 02h
+    int 21h
+    inc di
+    dec cx
+    jmp short MSO_Print_Nota
+
+MSO_Nueva_Linea:
+    mov dl, 13
+    mov ah, 02h
+    int 21h
+    mov dl, 10
+    mov ah, 02h
+    int 21h
+
+    inc si
+    xor ax, ax
+    mov al, contador_Estud
+    sub ax, si
+    mov cx, ax
+    jcxz MSO_Done
+    jmp short MSO_Siguiente
+
+MSO_Done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+MostrarEstudiantesOrdenado ENDP
+
 
 
 
@@ -1616,12 +1643,225 @@ Opcion5:
     jmp Fin_Programa
 
 
+; ------- Benchmark -------
+; ---------- Opcion 6: Benchmark ----------
+Opcion6:
+    ; validar que existan estudiantes
+    mov  al, contador_Estud
+    or   al, al
+    jnz  O6_AskIters
+    mov  dx, OFFSET msg_NoEstudiantes
+    mov  ah, 09h
+    int  21h
+    jmp  Menu_Principal
+
+; --- pedir cantidad de iteraciones (1..65535) ---
+O6_AskIters:
+    mov  dx, OFFSET msg_Benchmark
+    mov  ah, 09h
+    int  21h
+O6_ReadIter:
+    mov  ah, 0Ch
+    mov  al, 0Ah
+    mov  dx, OFFSET buf_Contador
+    int  21h
+    mov  al, [buf_Contador+1]
+    cmp  al, 1
+    jb   O6_ReadIter
+
+    ; AX = número leído 
+    xor  ax, ax
+    mov  cl, [buf_Contador+1]
+    mov  si, OFFSET buf_Contador+2
+O6_ParseIterLoop:
+    mov  bl, [si]
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O6_ReadIter
+    push bx               ; guardar dígito (0..9) en la pila
+    mov  bx, 10
+    mul  bx               ; DX:AX = AX*10
+    or   dx, dx
+    jnz  O6_ReadIter      ; overflow (>65535)
+    pop  bx               ; recuperar dígito
+    xor  bh, bh
+    add  ax, bx           ; AX = AX*10 + dígito
+    jc   O6_ReadIter
+    inc  si
+    dec  cl
+    jnz  O6_ParseIterLoop
+
+    cmp  ax, 1
+    jb   O6_ReadIter
+    mov  bench_iters, ax      ; **GUARDAR** total
+    mov  bench_iter_cur, 0    ; **reiniciar** contador
+
+; --- pedir ID de estudiante (1..contador_Estud) ---
+O6_AskID:
+    mov  dx, OFFSET msg_Buscar_Idx
+    mov  ah, 09h
+    int  21h
+O6_ReadID:
+    mov  ah, 0Ch
+    mov  al, 0Ah
+    mov  dx, OFFSET buf_Contador
+    int  21h
+    mov  al, [buf_Contador+1]
+    cmp  al, 1
+    jb   O6_ReadID
+
+    xor  ax, ax
+    mov  cl, [buf_Contador+1]
+    mov  si, OFFSET buf_Contador+2
+O6_ParseIdLoop:
+    mov  bl, [si]
+    sub  bl, '0'
+    cmp  bl, 9
+    ja   O6_ReadID
+    push bx
+    mov  bx, 10
+    mul  bx
+    or   dx, dx
+    jnz  O6_ReadID
+    pop  bx
+    xor  bh, bh
+    add  ax, bx
+    jc   O6_ReadID
+    inc  si
+    dec  cl
+    jnz  O6_ParseIdLoop
+
+    ; validar rango y guardar índice 0-based
+    cmp  ax, 1
+    jb   O6_AskID
+    cmp  al, contador_Estud
+    ja   O6_AskID
+    dec  ax
+    mov  bench_idx, ax
+
+; --- bucle de iteraciones ---
+O6_Loop:
+    inc  bench_iter_cur
+
+    mov  dx, OFFSET msg_IterPrefix
+    mov  ah, 09h
+    int  21h
+
+    mov  ax, bench_iter_cur
+    call PrintUIntAX
+
+    mov  dx, OFFSET msg_ColonSpace
+    mov  ah, 09h
+    int  21h
+
+    mov  ax, bench_idx
+    call PrintStudentAtIndex
+
+    mov  ax, bench_iter_cur
+    cmp  ax, bench_iters
+    jb   O6_Loop
+
+    jmp  Menu_Principal
+
+
+
+
+PrintUIntAX PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+
+    ; caso AX=0
+    cmp  ax, 0
+    jne  pux_build
+    mov  dl, '0'
+    mov  ah, 02h
+    int  21h
+    jmp  pux_done
+
+pux_build:
+    xor  cx, cx            ; contador de dígitos en la pila
+pux_divloop:
+    xor  dx, dx
+    mov  bx, 10
+    div  bx                ; AX = AX/10, DX = resto (0..9)
+    push dx                ; guardar resto
+    inc  cx
+    cmp  ax, 0
+    jne  pux_divloop
+
+pux_print:
+    pop  dx
+    add  dl, '0'
+    mov  ah, 02h
+    int  21h
+    loop pux_print
+
+pux_done:
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
+PrintUIntAX ENDP
+
+
+TouchStudentAtIndex PROC NEAR
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    xor  ah, ah
+    mov  si, ax                     ; SI = idx
+
+    ; --- tocar nombre ---
+    mov  ax, si
+    mov  bx, NOMBRE_LEN
+    mul  bx
+    mov  di, OFFSET nombres_Estud
+    add  di, ax
+    mov  bx, OFFSET NOMBRE_LEN_ARR
+    add  bx, si
+    mov  cl, [bx]
+    jcxz TS_SkipName
+    mov  dl, [di]                   
+TS_SkipName:
+
+    ; --- tocar nota (texto) ---
+    mov  ax, si
+    mov  bx, NOTA_LEN
+    mul  bx
+    mov  di, OFFSET notas
+    add  di, ax
+    mov  bx, OFFSET NOTAS_LEN_ARR
+    add  bx, si
+    mov  cl, [bx]
+    jcxz TS_Done
+    mov  dl, [di]
+
+TS_Done:
+    pop  di
+    pop  si
+    pop  dx
+    pop  cx
+    pop  bx
+    pop  ax
+    ret
+TouchStudentAtIndex ENDP
+
+
+
 ; ------- Manejo error en menu -------
-Opcion6: 
+Opcion7: 
     mov dx, OFFSET msg_Error_Menu
     mov ah, 09h
     int 21h
     jmp Inputs 
+
 
 ; ------------------ SALIDA ------------------
 Fin_Programa:
